@@ -1,0 +1,45 @@
+# SyncLyrics — ตั้งค่าโมเดล AI (ข้อ 5.3)
+# ค่าเริ่มต้นตั้งให้ NVIDIA RTX 4060 (VRAM 8 GB) บนคอมตั้งโต๊ะ
+# แก้ไฟล์นี้ใน %LOCALAPPDATA%\SyncLyrics\config\models.yaml (เขียนเฉพาะค่าที่ต่าง ที่เหลือใช้ค่านี้)
+version: 1
+
+device: auto              # auto = ใช้ CUDA ถ้ามี ไม่มีใช้ CPU (ช้า และแจ้งผู้ใช้)
+vram_budget_mb: 6500      # งบ VRAM รวมของ AI worker
+vram_reserve_mb: 1200     # เหลือไว้ให้ UI / shader / วิดีโอ เสมอ
+cudnn_benchmark: true
+empty_cache_after_track: true
+worker_priority: below_normal   # ต่ำกว่า UI และเสียงเสมอ
+watchdog_timeout_s: 20    # ไม่มี heartbeat นานเท่านี้ = worker ค้าง -> restart
+
+demucs:
+  enabled: true           # false = ข้ามการแยกเสียง (alignment ใช้เสียงรวม แม่นน้อยลง)
+  model: htdemucs
+  fp16: true
+  segment_s: 7.0          # ขนาดช่วงที่ Demucs ประมวลผลต่อครั้ง (htdemucs สูงสุด ~7.8)
+  shifts: 0               # >0 แม่นขึ้นเล็กน้อยแต่ช้าลงเป็นเท่าตัว
+  overlap: 0.25
+
+align:                    # torchaudio MMS_FA
+  enabled: true
+  fp16: true
+  batch_lines: 16         # จำนวนบรรทัดที่ align พร้อมกัน
+  min_confidence: 0.45    # ต่ำกว่านี้ใช้เวลาแบบประมาณแทน
+
+whisper:                  # faster-whisper (ใช้เมื่อไม่มีเนื้อเพลง หรือไม่มีเวลาบรรทัด)
+  enabled: true
+  model: large-v3-turbo
+  compute_type: float16
+  fallback_compute_type: int8_float16   # ใช้เมื่อ VRAM ไม่พอ
+  keep_loaded: false      # false = โหลดเฉพาะตอนใช้ แล้ว unload
+  beam_size: 5
+
+beats:
+  prefer: beat_this       # allin1 ถ้าติดตั้งได้ (ได้ท่อนเพลงด้วย) / beat_this ติดตั้งง่ายกว่า
+  beat_this_checkpoint: final0
+  min_confidence_for_beatmatch: 0.6
+
+progressive:              # ประมวลผลแบบทยอย (ข้อ 5.2)
+  chunk_s: 20.0
+  overlap_s: 2.5          # ซ้อนหัวท้ายแต่ละช่วง (ตัดที่ขอบบรรทัด)
+  lead_s: 30.0            # ต้องนำหน้าตัวเล่นอย่างน้อยเท่านี้
+  analysis_deadline_before_mix_s: 30.0

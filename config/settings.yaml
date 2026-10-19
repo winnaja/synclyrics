@@ -1,0 +1,89 @@
+# SyncLyrics — การตั้งค่าเริ่มต้น (ไฟล์นี้สร้างอัตโนมัติจาก app/core/config.py: Settings)
+# ห้ามแก้ไฟล์นี้ด้วยมือ — แก้ค่าเริ่มต้นในโค้ดแล้วรัน scripts/gen_default_settings.py
+# ค่าที่ผู้ใช้เปลี่ยนในหน้าตั้งค่าจะถูกเก็บที่ %LOCALAPPDATA%\SyncLyrics\settings.yaml
+version: 1
+lyrics_look:
+  font_family: Prompt
+  font_size: 44
+  font_weight: 700
+  line_spacing: 1.25
+  letter_spacing: 0.0
+  align: left
+  visible_lines: 7
+  color_sung: '#FFFFFF'
+  color_active: '#FFFFFF'
+  color_unsung: '#FFFFFF66'
+  glow_color: auto
+  blur_strength: 1.0
+  glow_strength: 1.0
+  animation_speed: 1.0
+  spring_stiffness: 170.0
+  spring_damping: 26.0
+  highlight_effect: wipe
+  show_translation: true
+  translation_scale: 0.55
+  show_romanization: false
+  romanization_scale: 0.5
+background:
+  kind: fluid
+  blur: 1.0
+  brightness: 0.8
+  speed: 1.0
+  beat_pulse: true
+  chorus_brighten: false
+  solid_color: '#111318'
+  gradient:
+  - '#1b1f3b'
+  - '#402b5a'
+  image_path: null
+desktop_lyrics:
+  enabled: false
+  locked: true
+  click_through: true
+  lines: 2
+  font_size: 32
+  color: '#FFFFFF'
+  shadow: 0.8
+  x: null
+  y: null
+  width: null
+lyrics_sources:
+  enabled: {}
+  allow_ai_transcribe: true
+playback:
+  preload_at_percent: 50
+  first_chunk_s: 25.0
+  cache_max_gb: 10.0
+  output_device: null
+  buffer_ms: 15
+  loudness_normalize: true
+  target_lufs: -14.0
+  video_enabled: false
+automix:
+  mode: smart
+  boldness: balanced
+  length: auto
+  allowed_styles:
+  - beatmatch_blend
+  - bass_swap
+  - filter_sweep
+  - echo_out
+  - short_crossfade
+  - long_crossfade
+  - clean_cut
+  max_tempo_change_pct: 6.0
+  show_indicator: true
+  show_mood: true
+  rating_popup: always
+  rating_popup_seconds: 7.0
+  transition_style: morph
+  short_transition_style: blur_through
+  transition_easing: spring
+  transition_strength: 1.0
+startup:
+  launch_with_windows: false
+  minimize_to_tray: true
+  open_browser: youtube
+  extension_sends_current_video: true
+theme: minimal
+power_saving: auto

@@ -1,0 +1,41 @@
+# --- ความลับ: ห้ามเข้า git เด็ดขาด ---
+cookies.txt
+*cookies*.txt
+*.cookies
+# extension/key.pem คือ private key ที่ใช้สร้าง extension ID คงที่
+extension/key.pem
+*.pem
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# --- ข้อมูลรันไทม์ (ปกติอยู่ใน %LOCALAPPDATA%\SyncLyrics แต่กันไว้เผื่อรันแบบ portable) ---
+/data/
+/cache/
+/logs/
+/models/
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+*.f32
+*.wav
+!tests/fixtures/**/*.wav
+
+# --- build ---
+/build/
+/dist/
+*.spec.bak
+# หมายเหตุ: ไฟล์ shader ที่คอมไพล์แล้ว (*.qsb) ตั้งใจ commit ไว้ ให้รันได้โดยไม่ต้องมี qsb
+
+# --- เครื่องมือ ---
+.vscode/
+.idea/
+.claude/settings.local.json
+Thumbs.db

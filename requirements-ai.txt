@@ -1,0 +1,22 @@
+# SyncLyrics — dependency ของ AI worker (เฟส 4) สำหรับ RTX 4060 / CUDA 12.8
+# ติดตั้งหลัง requirements.txt:
+#   py -3.12 -m pip install -r requirements-ai.txt
+#
+# สำคัญ: torch กับ torchaudio ต้องเวอร์ชันเดียวกันเสมอ
+#   torchaudio หยุดออกรุ่นใหม่ที่ 2.11 แต่ยังมี functional.forced_align และ pipelines.MMS_FA
+#   (ตรวจจาก wheel จริงแล้ว 2026-10-19) จึงล็อก torch ไว้ที่ 2.11 ด้วย
+#   ห้ามอัป torch เกิน 2.11 จนกว่าจะย้าย alignment ไปใช้ตัวอื่น — ดู docs/DECISIONS.md
+--extra-index-url https://download.pytorch.org/whl/cu128
+torch==2.11.0+cu128
+torchaudio==2.11.0+cu128
+
+demucs==4.1.0               # แยก stems (htdemucs)
+beat-this==1.1.0            # beat/downbeat — ตัวหลัก (ติดตั้งง่ายบน Windows)
+faster-whisper==1.2.1       # ถอดเสียง (large-v3-turbo)
+ctranslate2==4.8.3
+uroman==1.3.1.1             # แปลงอักษรไทย/อื่นๆ เป็นละตินก่อน MMS_FA
+librosa==1.0.0              # chroma -> key
+pyloudnorm==0.2.0           # LUFS
+
+# allin1 (ท่อน intro/verse/chorus) เป็นตัวเสริม ติดตั้งยากบน Windows (natten/madmom)
+# อยู่ใน requirements-ai-optional.txt — ถ้าติดตั้งไม่ได้ ระบบใช้ beat_this + ตัวแบ่งท่อนแบบง่ายแทน

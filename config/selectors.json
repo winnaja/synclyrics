@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "_comment": "selector ของหน้า YouTube / YouTube Music ที่ส่วนขยายใช้วางปุ่ม (ข้อ 10.4) — YouTube เปลี่ยนหน้าเว็บเมื่อไหร่ แก้ที่ไฟล์นี้ที่เดียว หาไม่เจอ = ไม่แสดงปุ่ม + log ห้ามทำให้หน้าเว็บพัง ค่าจริงจะตรวจและเติมในเฟส 2",
+  "youtube": {
+    "thumbnail_containers": [
+      "ytd-rich-item-renderer",
+      "ytd-video-renderer",
+      "ytd-compact-video-renderer",
+      "ytd-playlist-video-renderer",
+      "ytd-playlist-panel-video-renderer",
+      "yt-lockup-view-model"
+    ],
+    "thumbnail_link": "a#thumbnail, a.yt-lockup-view-model-wiz__content-image, a[href*='/watch?v=']",
+    "watch_actions_bar": "ytd-watch-metadata #top-level-buttons-computed",
+    "watch_title": "ytd-watch-metadata h1 yt-formatted-string",
+    "watch_channel": "ytd-watch-metadata ytd-channel-name a",
+    "music_section_rows": "ytd-horizontal-card-list-renderer yt-video-attribute-view-model, #items ytd-info-row-renderer",
+    "playlist_header": "ytd-playlist-header-renderer, yt-page-header-renderer",
+    "up_next_items": "ytd-watch-next-secondary-results-renderer ytd-compact-video-renderer, ytd-watch-next-secondary-results-renderer yt-lockup-view-model",
+    "video_element": "video.html5-main-video"
+  },
+  "youtube_music": {
+    "thumbnail_containers": [
+      "ytmusic-responsive-list-item-renderer",
+      "ytmusic-two-row-item-renderer",
+      "ytmusic-player-queue-item"
+    ],
+    "thumbnail_link": "a[href*='watch?v=']",
+    "player_bar_title": "ytmusic-player-bar .title",
+    "player_bar_byline": "ytmusic-player-bar .byline",
+    "video_element": "video"
+  }
+}

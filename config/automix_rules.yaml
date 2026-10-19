@@ -1,0 +1,110 @@
+# SyncLyrics — กฎ AutoMix (ส่วนที่ 7)
+# แก้แล้วมีผลทันที ไม่ต้องเปิดโปรแกรมใหม่ (โปรแกรมเฝ้าไฟล์นี้)
+# ค่าเหล่านี้ใช้เป็น "prior" ของระบบเรียนรู้ด้วย: ตอนยังไม่มีดาว ระบบจะทำตามกฎนี้
+# แก้ใน %LOCALAPPDATA%\SyncLyrics\config\automix_rules.yaml (เขียนเฉพาะค่าที่ต่าง)
+version: 1
+
+# ---------------------------------------------------------------------------
+# กฎเหล็ก (ข้อ 7.1) — ห้ามละเมิดทุกกรณี รวมถึงตอนระบบเรียนรู้ทดลอง
+# ทุก action ต้องผ่าน app/automix/iron_rules.py ก่อนใช้จริง
+# ---------------------------------------------------------------------------
+iron_rules:
+  vocal_overlap_max_s: 0.0          # เสียงร้องสองเพลงทับกันได้กี่วินาที (0 = ห้ามเลย)
+  vocal_guard_s: 0.4                # เผื่อขอบช่วงเสียงร้อง (กันคำแรก/คำสุดท้ายโดนตัด)
+  protect_last_lyric_line: true     # ห้ามมิกซ์ทับประโยคสุดท้ายของเนื้อเพลง
+  protect_fade_ending: true         # จบแบบ fade/โน้ตลากยาว: ซ้อนเพลงใหม่ตอนท้ายเท่านั้น ห้ามตัด
+  min_beat_confidence_for_beatmatch: 0.6
+  max_track_length_s: 900           # ยาวกว่า 15 นาที = ไม่ใช่เพลง -> เฟดธรรมดา
+  non_music_style: short_crossfade  # รูปแบบสำหรับพอดแคสต์/ไม่มี beat
+  respect_no_mix_flag: true         # เพลงที่ตั้ง "ห้ามมิกซ์" -> เล่นจนจบแล้วต่อแบบเรียบ
+
+# ---------------------------------------------------------------------------
+# คะแนนความเข้ากัน 0-100 (ข้อ 7.2) — น้ำหนักรวมกันควรได้ 1.0
+# ---------------------------------------------------------------------------
+compatibility:
+  weights:
+    bpm: 0.25             # ผลต่าง BPM (รวมกรณีครึ่ง/สองเท่า)
+    key: 0.20             # ระยะบน Camelot wheel
+    energy: 0.15          # energy ท้ายเพลง A เทียบต้นเพลง B
+    intro_outro: 0.15     # ความยาว intro ของ B / outro ของ A พอให้ซ้อนไหม
+    genre: 0.10           # แนวเพลงโดยประมาณ
+    loudness: 0.05        # ผลต่าง LUFS
+    beat_confidence: 0.10 # ความมั่นใจของ beat ทั้งสองเพลง
+  bpm_full_score_pct: 2.0       # ต่างไม่เกินนี้ได้เต็ม
+  bpm_zero_score_pct: 12.0      # ต่างเกินนี้ได้ 0
+  allow_half_double_bpm: true
+  camelot_scores:               # ระยะบนวงล้อ -> คะแนน 0-1
+    same: 1.0
+    adjacent: 0.9               # ±1 เลข หรือ A<->B เลขเดียวกัน
+    two_steps: 0.5
+    energy_boost: 0.7           # +2 (ขึ้นคีย์เพื่อเพิ่มพลัง)
+    other: 0.1
+
+# ---------------------------------------------------------------------------
+# เกณฑ์ตัดสินใจ (ตารางข้อ 7.2)
+# ---------------------------------------------------------------------------
+thresholds:
+  full_mix_min_score: 70        # >= นี้: มิกซ์เต็มรูปแบบตามระบบเรียนรู้
+  soft_crossfade_min_score: 40  # 40 ถึง full_mix: crossfade นุ่ม
+  # < 40: ต่อแบบเรียบ (A จบตามธรรมชาติ เว้นสั้นๆ แล้ว B เริ่มที่ downbeat แรก) และห้ามทดลอง
+  clean_cut_gap_s: 0.35
+  beatmatch_max_bpm_diff_pct: 6.0
+  when_unsure: safer            # ไม่แน่ใจ -> เลือกแบบที่เรียบกว่าเสมอ
+
+# ---------------------------------------------------------------------------
+# รูปแบบการมิกซ์ (ข้อ 7.3) — ค่าเริ่มต้นของแต่ละแบบ ระบบเรียนรู้ปรับความยาว/curve ได้ในช่วงที่กำหนด
+# ---------------------------------------------------------------------------
+styles:
+  beatmatch_blend:
+    bars: [8, 16]               # ความยาวที่อนุญาต (จำนวน bar)
+    curve: equal_power
+    restore_tempo_bars: 8       # ค่อยๆ คืน tempo เดิมของ B หลังมิกซ์
+  bass_swap:
+    bars: [4, 8]
+    curve: s_curve
+    swap_at: 0.5                # สลับเบสที่กึ่งกลางช่วงมิกซ์
+  filter_sweep:
+    seconds: [4, 8]
+    curve: s_curve
+    highpass_end_hz: 1200
+  echo_out:
+    seconds: [3, 6]
+    echo_beats: 0.75
+    feedback: 0.45
+  short_crossfade:
+    seconds: [2, 4]
+    curve: equal_power
+  long_crossfade:
+    seconds: [6, 12]
+    curve: equal_power
+  clean_cut:
+    gap_s: 0.35
+  fade_curves: [linear, equal_power, s_curve]
+
+# ---------------------------------------------------------------------------
+# ระบบเรียนรู้ (ข้อ 7.5)
+# ---------------------------------------------------------------------------
+learning:
+  algorithm: thompson_linear    # Bayesian linear regression + Thompson Sampling
+  prior_strength: 3.0           # ยิ่งมาก ยิ่งยึดกฎด้านบนนาน
+  noise_variance: 0.25
+  decay_half_life_days: 60      # ข้อมูลเก่าค่อยๆ ลดน้ำหนัก
+  boldness:                     # ระดับการทดลอง: คูณความแปรปรวนของ posterior ตอนสุ่ม
+    careful: 0.25
+    balanced: 1.0
+    dj: 2.0
+  no_explore_below_score: 40
+  bad_streak_length: 3          # รางวัลแย่ติดกันเท่านี้ -> ลดการทดลองชั่วคราว
+  bad_streak_reward: -0.3
+  bad_streak_cooldown_mixes: 5
+  rewards:                      # ข้อ 7.5 ตารางรางวัล (ดาวทับสัญญาณอัตโนมัติ)
+    stars: {1: -1.0, 2: -0.5, 3: 0.0, 4: 0.5, 5: 1.0}
+    skip_mix: -0.8
+    skip_track_within_15s: -0.6
+    volume_down_during_mix: -0.3
+    listened_60s: 0.2
+    seek_back_to_mix: 0.6
+  pair_memory:
+    ban_action_below_stars: 3   # คู่ที่ได้ 1-2 ดาว ครั้งหน้าห้ามใช้วิธีเดิม
+    repeat_action_stars: 5      # คู่ที่ได้ 5 ดาว ใช้วิธีเดิมซ้ำ
+  backup_keep_days: 7

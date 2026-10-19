@@ -1,0 +1,19 @@
+[project]
+name = "synclyrics"
+version = "0.0.1"
+description = "โปรแกรมเล่นเพลงจาก YouTube พร้อมเนื้อเพลงทีละคำและ AutoMix (ใช้ส่วนตัว)"
+requires-python = ">=3.12,<3.13"
+
+[tool.pytest.ini_options]
+# รัน test ทั้งหมดด้วยคำสั่งเดียว: scripts\run_tests.bat  (หรือ py -3.12 -m pytest)
+testpaths = ["tests"]
+addopts = "-q -ra"
+asyncio_mode = "auto"
+markers = [
+    "gpu: ต้องมี GPU + requirements-ai.txt (ข้ามอัตโนมัติถ้าไม่มี)",
+    "network: ต้องต่ออินเทอร์เน็ต (ข้ามได้ด้วย -m 'not network')",
+    "qt: ต้องมี PySide6",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning:pythainlp.*",
+]

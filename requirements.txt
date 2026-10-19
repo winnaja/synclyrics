@@ -1,0 +1,33 @@
+# SyncLyrics — dependency หลัก (โปรแกรม UI, เสียง, เนื้อเพลง, bridge)
+# Python 3.12 (64-bit) เท่านั้น — ดู docs/DECISIONS.md (2026-10-19)
+# กฎ: ล็อกเวอร์ชันทุกตัว ยกเว้น yt-dlp (อัปเดตเองวันละครั้ง เพราะ YouTube เปลี่ยนระบบบ่อย)
+# สถานะ: pin จาก PyPI ณ 2026-10-19 — ทดสอบติดตั้งจริงในเฟส 1 แล้วแก้ที่นี่ถ้าจำเป็น
+# งาน AI บน GPU แยกไว้ใน requirements-ai.txt (ติดตั้งในเฟส 4)
+
+# --- UI ---
+PySide6==6.12.0
+
+# --- เสียง ---
+numpy==2.5.4
+sounddevice==0.5.6          # PortAudio + WASAPI
+soundfile==0.14.0           # export WAV (Mix Lab) / อ่าน fixtures
+
+# --- เครือข่าย / YouTube ---
+yt-dlp>=2026.8.19           # ไม่ล็อกตายตัว: โปรแกรมอัปเดตเองวันละครั้ง
+httpx==0.28.1
+
+# --- config / ข้อมูล ---
+pydantic==2.14.1
+PyYAML==6.0.3
+
+# --- เนื้อเพลง ---
+pythainlp==5.4.0            # ตัดคำไทย
+rapidfuzz==3.14.6           # fuzzy match ชื่อเพลง
+
+# --- ระบบ ---
+psutil==7.2.2               # priority ของ process, ตรวจ RAM
+nvidia-ml-py==13.615.71     # อ่าน VRAM ในหน้า debug (pynvml)
+
+# --- เฟสหลัง (ติดตั้งไว้ก่อนได้ ไม่กระทบ) ---
+python-mpv==1.0.8           # วิดีโอ: ต้องมี libmpv-2.dll (ดู ARCHITECTURE.md §9)
+pyrubberband==0.4.0         # time-stretch: ต้องมี rubberband.exe (เฟส 6)

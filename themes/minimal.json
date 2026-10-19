@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "id": "minimal",
+  "name": "Minimal",
+  "_comment": "ธีม = ชุดค่าที่ทับ settings.lyrics_look และ settings.background (key ตรงกับ app/core/config.py) อีก 7 ธีมสร้างในเฟส 3",
+  "lyrics_look": {
+    "font_family": "Prompt",
+    "font_weight": 700,
+    "align": "left",
+    "color_sung": "#FFFFFF",
+    "color_active": "#FFFFFF",
+    "color_unsung": "#FFFFFF59",
+    "glow_color": "auto",
+    "glow_strength": 0.8,
+    "blur_strength": 1.0,
+    "highlight_effect": "wipe"
+  },
+  "background": {
+    "kind": "fluid",
+    "brightness": 0.75,
+    "speed": 0.8,
+    "beat_pulse": true
+  }
+}
