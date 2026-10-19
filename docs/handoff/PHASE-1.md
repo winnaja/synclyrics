@@ -101,6 +101,10 @@ scripts\check_cookies.bat        :: ตรวจ cookies Premium (ปิด Chro
 - **เสียง:** `AudioEngine.load(deck, video_id, full_program(buf))`, `play/pause/seek/set_master_volume/clear_deck`, `clocks[deck]`, `stats` · PCM เป็นไฟล์ `.f32` + sidecar `.meta.json` ใน `cache/audio` (AI worker เปิดไฟล์เดียวกันได้: float32 stereo, sample rate ของ engine ใน sidecar)
 - **DB ที่ใช้แล้ว:** `tracks` (title/artist ที่ยืนยันแล้วไม่ถูกเขียนทับ), `audio_cache`, `lyrics`, `lyrics_choice`, `playback_state` (ยังใช้ state.json แทน), `kv` ยังไม่ใช้
 
+## งานค้างทั้งหมดที่ผู้ใช้สั่งให้ย้ายไปทำในเฟส 2 (รายการเดียวกับ PROGRESS.md)
+1. บั๊กเสียงหายกลางเพลง + กรอไม่ได้ (ไล่ต่อด้วย log `audio-*.jsonl`) 2. เสียง Premium (cookies — ข้อเสนอส่งผ่านส่วนขยาย ต้องถามผู้ใช้) 3. ปุ่มเพลงถัดไป/ก่อนหน้า + คิวขั้นต่ำ (รับจาก playlist/Up next ของส่วนขยาย; preload/คิวเต็มยังเป็นเฟส 5) 4. มุมปกโค้ง 5. การเลือกภาษาของ youtube_subs 6. health check Node.js/ffmpeg/cookies 7. ให้ผู้ใช้ทดสอบซ้ำ (สลักจิต ฯลฯ)
+**ยังไม่ย้าย:** ASR/ตรวจเวอร์ชัน/แก้เวลาเนื้อเพลง MV-รีมิกซ์ = เฟส 4 (ถามผู้ใช้อีกครั้งในแชตเฟส 2 ว่าจะย้ายมาด้วยไหม — ใหญ่มาก ต้อง torch/GPU และควรใช้ Sonnet high)
+
 ## สิ่งที่เฟสถัดไปต้องรู้ก่อนเริ่ม และควรเริ่มจากตรงไหน
 **ลำดับเฟสใหม่: 2 (ส่วนขยาย YouTube→แอป) → 4 (AI ฟังเสียง) → 3 (หน้าตา) → 5 → 6 → 7 → 8**
 เฟส 2 (Sonnet 5.5 medium) แนะนำเริ่มจาก:
