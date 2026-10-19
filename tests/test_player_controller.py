@@ -191,5 +191,20 @@ def test_snapshot_and_restore_paused(rig) -> None:
     assert snap["video_id"] == VID and snap["track_ref"]["video_id"] == VID
     rig.ctl.toggle_pause()
     assert rig.ctl.restore(snap)
+    ok = wait_for(lambda: rig.ctl.loaded)
+    errs = [d for t, d in rig.events if t == "error"]
+    assert ok, f"restore ไม่สำเร็จ: {errs}"
+    assert wait_for(lambda: not rig.ctl.playing), f"errors={errs}"  # กู้แล้วต้องหยุดไว้ ยังไม่เล่นเอง
+
+
+def test_replaying_same_track_does_not_reload(rig) -> None:
+    """กดลิงก์เดิมซ้ำขณะเพลงโหลดอยู่ = กลับต้นเพลง ไม่ดาวน์โหลด/ถอดรหัสใหม่ (กันไฟล์ memmap ถูกล็อกบน Windows)"""
+    rig.ctl.play(TrackRef(video_id=VID))
     assert wait_for(lambda: rig.ctl.loaded)
-    assert wait_for(lambda: not rig.ctl.playing)  # กู้แล้วต้องหยุดไว้ ยังไม่เล่นเอง
+    n = rig.media.calls
+    time.sleep(0.5)
+    before = rig.ctl.get_clock().position()
+    rig.ctl.play(TrackRef(video_id=VID))
+    time.sleep(0.1)
+    assert rig.media.calls == n and not [d for t, d in rig.events if t == "error"]
+    assert rig.ctl.get_clock().position() < before  # กลับไปต้นเพลง (pump ใน test เดินเร็วกว่าเวลาจริง)

@@ -301,10 +301,14 @@ class YouTubeClient:
                 notes.append("ไม่มีไฟล์ cookies.txt")
                 continue
             try:
-                with yt_dlp.YoutubeDL(self._opts(mode)):  # โหลด cookies ตอนสร้าง
-                    pass
+                with yt_dlp.YoutubeDL(self._opts(mode)) as ydl:
+                    # yt-dlp โหลด cookies แบบขี้เกียจ ต้องแตะ cookiejar ถึงจะอ่านจริง (ไม่งั้นจะรายงาน "ได้" ทั้งที่อ่านไม่ได้)
+                    n = sum(1 for c in ydl.cookiejar if "youtube" in c.domain or "google" in c.domain)
+                if n == 0:
+                    raise ValueError("ไม่พบ cookies ของ YouTube/Google ในแหล่งนี้ (ยังไม่ได้ล็อกอิน?)")
                 self.cookie_mode = mode
-                return mode, "อ่าน cookies จาก Chrome ได้" if mode == "chrome" else "ใช้ cookies.txt ที่ export เอง"
+                return mode, (f"อ่าน cookies จาก Chrome ได้ ({n} รายการ)" if mode == "chrome"
+                              else f"ใช้ cookies.txt ที่ export เอง ({n} รายการ)")
             except Exception as e:
                 notes.append(f"{mode}: {redact(str(e))[:160]}")
         self.cookie_mode = "none"

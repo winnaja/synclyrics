@@ -117,6 +117,17 @@ class PlayerController:
     def play(self, track: TrackRef, start_at: float = 0.0, autoplay: bool = True) -> None:
         """เริ่มเล่นเพลงใหม่ (ยกเลิกงานของเพลงก่อนหน้า)"""
         with self._lock:
+            if self.loaded and self.track is not None and self.track.video_id == track.video_id:
+                # เพลงเดียวกันที่โหลดอยู่แล้ว (กดลิงก์ซ้ำ/กู้สถานะ): กลับไปตำแหน่งที่ขอ ไม่โหลดใหม่
+                # (โหลดใหม่ชนไฟล์ PCM ที่ deck ถืออยู่ — Windows ลบ/เขียนทับไฟล์ที่ memmap อยู่ไม่ได้)
+                self.engine.seek(self.active_deck, max(0.0, start_at))
+                if autoplay and not self.playing:
+                    self.engine.play(self.active_deck)
+                elif not autoplay and self.playing:
+                    self.engine.pause(self.active_deck)
+                self.playing = autoplay
+                self._publish_playback()
+                return
             self._token += 1
             token = self._token
             self._cancel_current()
