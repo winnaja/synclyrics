@@ -1,7 +1,7 @@
 # ARCHITECTURE.md — SyncLyrics
 
 > **อ่านไฟล์นี้ก่อนแก้โค้ดทุกครั้ง** · อัปเดตทุกครั้งที่แก้โครงสร้าง
-> สถานะ: เฟส 0 (โครงและสัญญากลาง) — ส่วนที่ยังเป็น stub เขียนว่า "เฟส N" ใน docstring
+> สถานะ: เฟส 1 เสร็จ (เล่นเสียงจาก YouTube + เนื้อเพลง + ทีละคำแบบประมาณ + UI ขั้นต่ำ) — ส่วนที่ยังเป็น stub เขียนว่า "เฟส N" ใน docstring (ดู §12)
 > ปรับล่าสุด: 2026-10-20
 
 ภาพรวม: โปรแกรมเล่นเพลงบน Windows (Python 3.12 + PySide6/QML) เล่นเสียงจาก YouTube พร้อมเนื้อเพลงทีละคำ, AutoMix ที่เรียนรู้จากดาว และ AI บน GPU ในเครื่อง คู่กับส่วนขยาย Chrome ที่เป็นแค่ตัวส่งเพลง/รีโมต
@@ -121,7 +121,7 @@ logic ทั้งหมดไม่รู้จัก Qt — ส่งเหต
 | เหตุการณ์ | payload | ผู้ส่ง |
 | --- | --- | --- |
 | `track.changed` | video_id, track_ref, deck | player |
-| `track.meta_ready` | meta, cover_path, palette | player/media |
+| `track.meta_ready` | meta, cover_path, palette | player/media (ส่ง 2 รอบ: ชื่อก่อน แล้วปกตามมา) |
 | `playback.state` | playing, video_id | player |
 | `lyrics.ready` | lyrics, source_label, candidates_count | lyrics |
 | `lyrics.timing` | start, end, words | ai client |
@@ -130,6 +130,9 @@ logic ทั้งหมดไม่รู้จัก Qt — ส่งเหต
 | `queue.changed` / `preload.status` | items / stage, fraction | player |
 | `mix.planned` / `mix.started` / `mix.finished` / `mix.rating_request` | plan / mix_id | automix |
 | `ai.status` / `bridge.status` / `error` | … | ai / bridge / ทุกส่วน |
+| `lyrics.offset` | video_id, offset | player (ปรับด้วย [ ] — UI เป็นคนเลื่อนเวลา: เวลาเนื้อเพลง = เวลาเสียง − offset) |
+| `player.status` | text | player ("กำลังโหลดเสียง 40%") |
+| `bridge.message` | type, payload, id, client | bridge (ข้อความดิบจากส่วนขยาย/ตัวเปิดซ้ำ) |
 
 QML (โครงใน `app/ui/qml/Main.qml`): NowPlaying, LyricsView/LyricLine (shader mask ทีละคำ), Background (Fluid/Blur Cover/Video/…), Transitions, RatingPopup, SettingsPage, DebugPage, DesktopLyrics
 กฎประสิทธิภาพ: อ่านนาฬิกาทุกเฟรม (ไม่ใช้ Timer), node ข้อความสร้างครั้งเดียวต่อบรรทัด, วาดเฉพาะบรรทัดใกล้จอ, FPS < 50 → ลดเอฟเฟกต์อัตโนมัติ
@@ -255,3 +258,45 @@ analysis A,B ──▶ compat.py (0-100) ──┬─ < 40 ───────
 6. **torch/torchaudio อัปเวอร์ชันแล้ว alignment หาย** → ห้ามอัปเกิน 2.11 (DECISIONS)
 7. **allin1 ติดตั้งไม่ได้บน Windows** → beat_this + ตัวแบ่งท่อนแบบง่าย
 8. **ตัดคำไทยช้า/วาดสระผิด** → warm-up pythainlp ตอนเปิด, ใช้ grapheme cluster, text shaping ของ Qt
+
+
+---
+
+## 12. สถานะจริงของเฟส 1 (อัปเดตให้ตรงกับโค้ด)
+
+ทำงานจริงแล้ว: ทุกอย่างในโฟลเดอร์ `app/media`, `app/audio` (deck เดียว), `app/lyrics`, `app/player/controller.py`, `app/main.py`, `app/ui`, single instance (`bridge/pipe_server.py`)
+ยังเป็น stub: `app/ai/*` (เฟส 4), `app/automix/*` (เฟส 6-7), `bridge/host.py` + โปรโตคอลส่วนขยาย (เฟส 2), `audio/dsp.py` ยกเว้น Limiter (เฟส 5-6), queue/preload (เฟส 5), shader/ธีม/ตั้งค่า (เฟส 3)
+
+### เส้นทางตั้งแต่กดเล่นจนมีเสียง (วัดจริง: เสียงออก ~2.7 วิจากสถานะเย็น, เนื้อเพลง ~4 วิ)
+`PlayerController.play` → `IoThread` → `YouTubeClient.fetch_and_download` (**extract ครั้งเดียว**: `on_info` ถูกเรียกทันทีที่รู้ข้อมูล → เริ่มหาเนื้อเพลง+ปกขนานกับการโหลดเสียง) → `Decoder` (ffmpeg → `.f32` memmap) → `wait_for_frames(2 วิ)` → `engine.load(full_program(buf))` + `play`
+เพลงที่เคยเล่น: `audio_cache` ใน DB + `open_cached` (sidecar `<id>.f32.meta.json`) → เล่นทันทีโดยไม่เรียก yt-dlp
+
+### ไฟล์ที่เพิ่ม/ขยายในเฟส 1
+| ไฟล์ | หน้าที่ |
+| --- | --- |
+| `app/core/io_thread.py` | `IoThread`: asyncio loop ใน daemon thread, `submit(coro)` จาก thread ใดก็ได้, `stop()` ยกเลิกงานค้าง |
+| `app/media/youtube.py` | `YouTubeClient`: ลำดับ cookies chrome → cookies.txt → ไม่ล็อกอิน (ลดระดับอัตโนมัติ), `fetch_and_download`, `search`, `test_cookies`; ใช้ Node.js ใน PATH แก้โจทย์ JS ของ YouTube (yt-dlp-ejs) |
+| `app/media/cache.py` | จำกัดขนาด cache เสียงแบบ LRU, ปุ่มล้าง, ลงทะเบียนไฟล์ |
+| `app/media/artwork.py` | ปก: iTunes 1000x1000 (ต้องคล้ายทั้งชื่อ+ศิลปิน+ความยาว) → thumbnail YouTube (palette เฟส 3) |
+| `app/audio/engine.py` | `start(open_stream=False)` ใช้ใน test/ไม่มีลำโพง, `_callback` ขับเองได้, control thread ขยาย buffer เมื่อ underrun |
+| `app/audio/decoder.py` | `open_cached`, `wait_for_frames`, sidecar meta, ยกเลิกได้ |
+| `app/audio/deck.py` | `full_program(buf)` สร้าง program ของ buffer ที่ยังถอดรหัสไม่เสร็จได้ |
+| `app/lyrics/service.py` | ค้นทุกแหล่งพร้อมกัน, `on_update` ส่งผลชั่วคราวทันทีที่แหล่งแรกตอบ, cache+ตัวเลือกผู้ใช้ใน DB, `next_candidate`, `set_manual_lyrics` |
+| `app/lyrics/title_parser.py` | แยกชื่อ/ศิลปิน (Music section > yt-dlp > ช่อง Topic > ชื่อวิดีโอ, รูปแบบ `ศิลปิน 'เพลง'`, สลับลำดับ), `alt_titles` ให้ scoring |
+| `app/lyrics/scoring.py` | คะแนน 0-100: ชื่อ/ศิลปิน/ความยาว/ระดับเวลา/เวอร์ชัน + `TITLE_GATE` (ชื่อไม่คล้ายต้องไม่ผ่านแม้ความยาวตรง) + โทษแบบนุ่มเมื่อความยาวต่าง >10 วิ (MV ยาวกว่าเสียง) |
+| `app/lyrics/parsers/*` | LRC/Enhanced LRC, YRC, QRC (ข้อความที่ถอดแล้ว), VTT, plain |
+| `app/lyrics/sources/*` | lrclib, netease (YRC ทีละคำ), qqmusic (LRC บรรทัด), lyrics_ovh, youtube_subs (หลายภาษา เรียงตามภาษาร้องที่เดา) |
+| `app/player/controller.py` | ประกอบทุกอย่างข้างต้น, offset ต่อเพลง, กู้/บันทึกสถานะ 5 วิ |
+| `app/ui/*` | `UiContext`, `PlayerBridge`, `ClockBridge` (QML อ่านนาฬิกาทุกเฟรมผ่าน FrameAnimation), `LyricsModel`, QML 4 ไฟล์, `python -m app.ui.demo` (ข้อมูลปลอม) |
+| `scripts/run_app.bat`, `check_cookies.bat/.py` | เปิดโปรแกรม / ตรวจ cookies Premium |
+
+### กติกาที่เพิ่มหลังผู้ใช้ทดสอบเฟส 1
+- **ปก:** เพลงต้นฉบับ → iTunes (ปกทางการ) · มี version tag (remix/live/cover/sped up ...) หรือหาปกทางการไม่เจอ → ปกคลิป YouTube (`artwork.fetch_artwork`)
+- **เครดิตในเนื้อเพลง** ("作词 : ...", "Produced by: ...", "เนื้อร้อง : ...") ถูกกรองออกที่ parser ทุกตัว (`parsers/lrc.is_credit_line`)
+- **403 จาก googlevideo:** `fetch_and_download` ลองซ้ำ 3 แบบ (`FALLBACK_VARIANTS`: ปกติ → ไม่แบ่ง chunk → ไคลเอนต์ tv/web_safari)
+- UI มีแถบระดับเสียง (`player.setVolume` → `engine.set_master_volume`)
+
+### ข้อจำกัดที่รู้ (ตั้งใจเลื่อน)
+- QRC ของ QQ ทีละคำ: ถอดรหัสไม่ได้ (DES ดัดแปลง) → qqmusic ให้เฉพาะ LRC ระดับบรรทัด
+- เนื้อเพลงที่ความยาวต่างจากวิดีโอ >10 วิ: เวลาเหมือนจะเลื่อนทั้งเพลง — แสดงคำเตือนที่ป้ายแหล่ง และปรับมือด้วย `[` `]` · แก้อัตโนมัติด้วย AI ในเฟส 4 (`offset.py`)
+- ฟอนต์หลัก **SF Thonburi** (ผู้ใช้เลือก) ต้องติดตั้งในเครื่อง (ไม่ฝังกับโปรแกรม เพราะเป็นฟอนต์ของ Apple) ไม่มี = ใช้ `lyrics_look.font_fallbacks`

@@ -51,7 +51,10 @@ class _Model(BaseModel):
 # settings.yaml
 # ---------------------------------------------------------------------------
 class LyricsLook(_Model):
-    font_family: str = "Prompt"
+    # ฟอนต์หลักสำหรับไทย+อังกฤษ (ผู้ใช้เลือก SF Thonburi — ฟอนต์ของ Apple ติดตั้งในเครื่องผู้ใช้เอง ไม่รวมมากับโปรแกรม)
+    font_family: str = "SF Thonburi"
+    # ไม่มีฟอนต์หลักในเครื่อง -> ใช้ตัวแรกที่มี (ฟรีและฝังกับตัวติดตั้งในเฟส 3/8)
+    font_fallbacks: list[str] = ["Prompt", "Noto Sans Thai", "Kanit", "Segoe UI"]
     font_size: int = Field(44, ge=12, le=160)
     font_weight: int = Field(700, ge=100, le=900)
     line_spacing: float = Field(1.25, ge=0.8, le=3.0)
@@ -112,7 +115,7 @@ class PlaybackSettings(_Model):
     first_chunk_s: float = Field(25.0, ge=10, le=60)
     cache_max_gb: float = Field(10.0, ge=0.5, le=500)
     output_device: str | None = None  # None = อุปกรณ์เริ่มต้นของ Windows
-    buffer_ms: int = Field(15, ge=5, le=200)
+    buffer_ms: int = Field(30, ge=5, le=200)
     loudness_normalize: bool = True
     target_lufs: float = Field(-14.0, ge=-30, le=-5)
     video_enabled: bool = False

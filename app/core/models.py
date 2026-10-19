@@ -144,6 +144,8 @@ class TrackMeta:
     version_tags: frozenset[str] = frozenset()
     # คำค้นหลายแบบ เรียงจากน่าจะถูกที่สุด
     queries: tuple[str, ...] = ()
+    # ข้อความดิบจากชื่อวิดีโอที่อาจเป็นชื่อเพลง/ศิลปิน (ทุกส่วนที่แยกได้) — scoring ใช้เทียบเมื่อแยกลำดับผิด
+    alt_titles: tuple[str, ...] = ()
 
 
 @dataclass(slots=True)

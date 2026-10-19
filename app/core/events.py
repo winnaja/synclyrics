@@ -35,6 +35,9 @@ MIX_FINISHED = "mix.finished"                # {mix_id}
 RATING_REQUEST = "mix.rating_request"        # {mix_id, cover_a, cover_b}
 AI_STATUS = "ai.status"                      # {state, vram_used_mb, queue}
 BRIDGE_STATUS = "bridge.status"              # {connected, ext_version}
+BRIDGE_MESSAGE = "bridge.message"            # {type, payload, id, client}  ข้อความดิบจากส่วนขยาย/ตัวเปิดซ้ำ
+LYRICS_OFFSET = "lyrics.offset"              # {video_id, offset}  offset เนื้อเพลง (วินาที) ของเพลงที่เล่นอยู่
+PLAYER_STATUS = "player.status"              # {text}  ข้อความสถานะสั้นๆ ให้ผู้ใช้ เช่น "กำลังโหลดเสียง..."
 ERROR = "error"                              # {module, message, user_message, recoverable}
 
 

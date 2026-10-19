@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import sys
 from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass(slots=True)
@@ -51,8 +52,132 @@ def shift_held() -> bool:
         return False
 
 
+def _setup_core(opts: LaunchOptions) -> Any:
+    """ขั้นที่ 3-5: path, log, config, DB, EventBus, IO thread — คืนวัตถุรวม (SimpleNamespace)"""
+    from types import SimpleNamespace
+
+    from app.core import db as dbmod
+    from app.core.config import Settings, load_model
+    from app.core.events import EventBus
+    from app.core.io_thread import IoThread
+    from app.core.log import get_logger, setup_logging
+    from app.core.paths import get_paths
+
+    paths = get_paths()
+    paths.ensure()
+    setup_logging(paths.logs_dir)
+    log = get_logger("app")
+    settings, warnings = load_model(paths, "settings.yaml", Settings)
+    for w in warnings:
+        log.warning("config", extra={"data": {"warning": w}})
+    dbmod.connect(paths.db_file).close()  # รัน migration ครั้งเดียวก่อนทุก thread
+    bus = EventBus()
+    io = IoThread().start()
+    return SimpleNamespace(paths=paths, settings=settings, warnings=warnings, bus=bus, io=io, log=log)
+
+
+def _start_engine(core: Any) -> Any:
+    """ขั้นที่ 4: เสียงต้องพร้อมก่อนอย่างอื่น — เปิดไม่สำเร็จ: คืนเอนจินที่ยังไม่ทำงาน + ข้อความให้ UI แจ้ง"""
+    from app.audio.engine import AudioEngine, EngineConfig
+
+    pb = core.settings.playback
+    engine = AudioEngine(EngineConfig(device=pb.output_device, buffer_ms=pb.buffer_ms))
+    try:
+        engine.start()
+        core.engine_error = None
+    except Exception as e:
+        core.log.exception("เปิดอุปกรณ์เสียงไม่ได้")
+        core.engine_error = f"เปิดอุปกรณ์เสียงไม่ได้: {e}"
+    return engine
+
+
 def main(argv: list[str] | None = None) -> int:
-    """เฟส 1 จะประกอบส่วนที่มีจริง ส่วนที่ยังไม่มีให้ข้ามอย่างปลอดภัย"""
-    opts = parse_args(sys.argv[1:] if argv is None else argv)
+    """ประกอบทุกส่วนตามลำดับที่ปลอดภัย (ดูด้านบน) ส่วนที่พังข้ามอย่างปลอดภัย"""
+    args = sys.argv[1:] if argv is None else argv
+    opts = parse_args(args)
     opts.safe_mode = opts.safe_mode or shift_held()
-    raise NotImplementedError("เฟส 1")
+
+    # 2. single instance — ต้องทำก่อนสร้างอะไรหนักๆ
+    from app.bridge.pipe_server import BridgeServer, notify_existing_instance
+
+    if notify_existing_instance(args):
+        return 0
+
+    core = _setup_core(opts)
+    log = core.log
+    log.info("เริ่มโปรแกรม", extra={"data": {"safe_mode": opts.safe_mode, "args": args}})
+
+    from app.core.events import BRIDGE_MESSAGE, ERROR
+    from app.lyrics import thai
+    from app.lyrics.service import LyricsService
+    from app.media.youtube import YouTubeClient
+    from app.player.controller import PlayerController
+    from app.player.state import load_state
+    from app.ui.app_window import UiContext, run_ui
+
+    engine = _start_engine(core)
+    media_dir = None
+    try:
+        from app.audio.decoder import find_ffmpeg
+
+        ff = find_ffmpeg()
+        media_dir = ff.parent if ff else None
+        if ff is None:
+            core.engine_error = (core.engine_error or "") + " ไม่พบ ffmpeg — ติดตั้ง ffmpeg แล้วเปิดใหม่"
+    except Exception:
+        log.exception("ตรวจ ffmpeg ไม่สำเร็จ")
+    media = YouTubeClient(core.paths.cookies_file, ffmpeg_dir=media_dir)
+    lyrics = LyricsService(core.paths.db_file, core.settings.lyrics_sources)
+    controller = PlayerController(engine, core.bus, lyrics, media, None, core.paths.db_file, core.settings,
+                                  paths=core.paths, io=core.io)
+    controller.start_background_tasks()
+    core.io.loop.call_soon_threadsafe(lambda: core.io.loop.run_in_executor(None, thai.warmup))  # เตรียมตัดคำไทย
+
+    bridge = BridgeServer(core.bus)
+    window: dict[str, Any] = {}
+
+    def on_bridge(topic: str, p: dict[str, Any]) -> None:
+        """ข้อความจากส่วนขยาย/ตัวเปิดซ้ำ (เฟส 1: focus + ลิงก์จาก argv; เฟส 2 เพิ่มชนิดอื่น)"""
+        if p.get("type") == "command" and p.get("payload", {}).get("name") == "focus":
+            for a in p["payload"].get("argv", []):
+                if not a.startswith("-"):
+                    controller.play_url(a)
+            raise_window = window.get("raise")
+            if raise_window:
+                raise_window()
+
+    core.bus.subscribe(BRIDGE_MESSAGE, on_bridge)
+
+    def on_started(raise_window: Any) -> None:
+        """เรียกใน UI thread หลัง QML โหลดแล้ว: เปิด named pipe + แจ้ง error ที่ค้าง + กู้สถานะ"""
+        window["raise"] = raise_window
+        if not bridge.start():
+            log.error("เปิด bridge ไม่สำเร็จ (ส่วนขยายจะต่อไม่ได้ แต่โปรแกรมเล่นเพลงได้ปกติ)")
+        if core.engine_error:
+            core.bus.publish(ERROR, {"module": "audio", "message": core.engine_error,
+                                     "user_message": core.engine_error, "recoverable": False})
+        if opts.open_url:
+            controller.play_url(opts.open_url)
+        else:
+            state = load_state(core.paths.state_file)
+            if state:
+                controller.restore(state)
+
+    def shutdown() -> None:
+        controller.shutdown()
+        try:
+            bridge.stop()
+        except Exception:
+            log.exception("ปิด bridge ไม่สำเร็จ")
+        engine.stop()
+        core.io.stop()
+
+    ctx = UiContext(bus=core.bus, get_clock=controller.get_clock, controller=controller,
+                    settings=core.settings, shutdown=shutdown, on_started=on_started)
+    try:
+        return run_ui(ctx, safe_mode=opts.safe_mode)
+    except Exception:
+        # UI พังต้องไม่ทำให้เสียงหยุดทันที แต่ไม่มี UI ผู้ใช้ควบคุมไม่ได้ — log แล้วปิดอย่างเรียบร้อย
+        log.exception("UI พัง")
+        shutdown()
+        return 1

@@ -44,6 +44,23 @@ class PcmBuffer:
         mm = np.memmap(path, dtype=np.float32, mode=mode, shape=(total_frames, 2))
         return PcmBuffer(mm, sample_rate, path)
 
+    @staticmethod
+    def from_array(data: np.ndarray, sample_rate: int) -> "PcmBuffer":
+        """สร้าง buffer จาก array ที่พร้อมทั้งหมดแล้ว (ใช้ใน test/render) — complete และ frames_ready เต็ม"""
+        buf = PcmBuffer(np.ascontiguousarray(data, dtype=np.float32), sample_rate)
+        buf.frames_ready = buf.total_frames
+        buf.complete = True
+        return buf
+
+
+def full_program(buffer: PcmBuffer, media_start_s: float = 0.0) -> "list[Segment]":
+    """program มี Segment เดียวครอบทั้ง buffer (เล่นต้นฉบับตรงๆ ไม่ stretch)
+
+    src_end ใช้ total_frames ของ buffer — ถ้า buffer ยังถอดรหัสไม่เสร็จ total_frames คือค่าประมาณ
+    (ขนาด memmap) deck จะรอ/เงียบตาม frames_ready และจบเมื่อ complete แล้วถึงเฟรมสุดท้ายจริง
+    """
+    return [Segment(buffer, 0, buffer.total_frames, media_start_s, 1.0)]
+
 
 @dataclass(slots=True)
 class Segment:

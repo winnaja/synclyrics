@@ -3,7 +3,12 @@
 # ค่าที่ผู้ใช้เปลี่ยนในหน้าตั้งค่าจะถูกเก็บที่ %LOCALAPPDATA%\SyncLyrics\settings.yaml
 version: 1
 lyrics_look:
-  font_family: Prompt
+  font_family: SF Thonburi
+  font_fallbacks:
+  - Prompt
+  - Noto Sans Thai
+  - Kanit
+  - Segoe UI
   font_size: 44
   font_weight: 700
   line_spacing: 1.25
@@ -55,7 +60,7 @@ playback:
   first_chunk_s: 25.0
   cache_max_gb: 10.0
   output_device: null
-  buffer_ms: 15
+  buffer_ms: 30
   loudness_normalize: true
   target_lufs: -14.0
   video_enabled: false
