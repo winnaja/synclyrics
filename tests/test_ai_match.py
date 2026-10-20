@@ -283,3 +283,14 @@ def test_ctc_to_result_accepts_consistent_offset_and_rejects_scrambled_alignment
     scrambled = [[Span(30.0 - 3 * i, 30.5 - 3 * i, 0.3), Span(30.5 - 3 * i, 31.0 - 3 * i, 0.3)] for i in range(10)]
     assert ctc_to_result(scrambled, lines) is None                              # โครงสร้างต่าง = ใช้เส้นทาง Whisper
     assert ctc_to_result([None] * 10, lines) is None
+
+
+def test_ctc_score_prefers_text_that_the_audio_supports():
+    from app.ai.pipeline.align import Span
+    from app.ai.pipeline.match import InLine, ctc_score
+
+    lines = [InLine(words=["hello", "world"]), InLine(words=["abc"])]
+    strong = [[Span(0, 1, 0.5), Span(1, 2, 0.5)], [Span(3, 4, 0.5)]]
+    weak = [[Span(0, 1, 0.05), Span(1, 2, 0.05)], [Span(3, 4, 0.05)]]
+    assert ctc_score(strong, lines) > 3 * ctc_score(weak, lines) > 0
+    assert ctc_score([None, None], lines) == 0.0

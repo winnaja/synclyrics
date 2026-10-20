@@ -84,8 +84,8 @@ class FakeAi:
         self.cancelled: list[str] = []
         self.handler = None
 
-    def submit_align(self, video_id, audio_path, lines, language, start_hint, handler):
-        self.submits.append({"video_id": video_id, "audio_path": audio_path, "lines": lines, "language": language, "hint": start_hint})
+    def submit_align(self, video_id, audio_path, lines, language, start_hint, handler, alts=None):
+        self.submits.append({"video_id": video_id, "audio_path": audio_path, "lines": lines, "language": language, "hint": start_hint, "alts": alts or []})
         self.handler = handler
         return "job1"
 
@@ -221,3 +221,20 @@ def test_reconstruct_lyrics_mix_lyric_text_and_ai_text():
 
 def test_clean_label_drops_stale_warnings():
     assert al.clean_label("จาก NetEase · ทีละบรรทัด · ความยาวต่างจากวิดีโอ 111 วิ เวลาอาจเลื่อน · จัดเวลาจากเสียง 40%") == "จาก NetEase · ทีละบรรทัด"
+
+
+def test_ai_picks_alternate_lyrics_version_that_matches_the_audio_best():
+    import asyncio
+
+    from app.ai import aligner as al
+
+    base = make_lyrics()
+    alt = make_lyrics()
+    h = al.LyricsAligner.__new__(al.LyricsAligner)
+    h._alts = {"v": [(alt, "ALT")]}
+    got, label = h._pick_base("v", base, "MAIN", {"alt": 1})
+    assert got is alt and "ALT" in label and "ตรงกับเสียง" in label
+    got, label = h._pick_base("v", base, "MAIN", {"alt": 0})
+    assert got is base and label == "MAIN"
+    assert h._pick_base("v", base, "MAIN", {"alt": 5}) == (base, "MAIN")                # ดัชนีเกิน = ใช้ฉบับหลัก
+    _ = asyncio

@@ -189,17 +189,22 @@ class LyricsService:
         if chosen_c is None:
             return LyricsResult(None, ranked, "ไม่พบเนื้อเพลง", from_cache,
                                 needs_ai_transcription=self.settings.allow_ai_transcribe, meta=meta, final=final)
-        ly = chosen_c.lyrics
-        if ly.timing != TimingLevel.WORD:
-            ly = estimate_lyrics(ly, duration or ly.duration or 240.0)
-        if getattr(self.settings, "split_long_lines", False):
-            ly = split_long_lines(ly, int(self.settings.max_line_width))
+        ly = self.prepare_lyrics(chosen_c.lyrics, duration)
         label = self._label(chosen_c.lyrics)
         got = chosen_c.matched_duration or chosen_c.lyrics.duration
         diff = abs(duration - got) if duration and got else 0.0
         if diff > scoring.SOFT_DURATION_DIFF_S:  # เช่น MV มีฉากเปิดเรื่อง: เวลาอาจเลื่อน ผู้ใช้ปรับด้วย [ ] ได้
             label += f" · ความยาวต่างจากวิดีโอ {diff:.0f} วิ เวลาอาจเลื่อน"
         return LyricsResult(ly, ranked, label, from_cache, meta=meta, final=final)
+
+    def prepare_lyrics(self, lyrics: Lyrics, duration: float | None) -> Lyrics:
+        """เนื้อเพลงดิบจากแหล่ง -> พร้อมแสดง: ใส่เวลาประมาณรายคำ (ถ้ายังไม่มี) + ตัดบรรทัดยาว"""
+        ly = lyrics
+        if ly.timing != TimingLevel.WORD:
+            ly = estimate_lyrics(ly, duration or ly.duration or 240.0)
+        if getattr(self.settings, "split_long_lines", False):
+            ly = split_long_lines(ly, int(self.settings.max_line_width))
+        return ly
 
     @staticmethod
     def _reconcile_meta(track: TrackRef, meta: TrackMeta, cands: list[LyricsCandidate],

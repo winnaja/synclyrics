@@ -570,7 +570,21 @@ class PlayerController:
             ai = self.ai
             if ai is not None and not getattr(ai, "started", True):   # ผู้ใช้เพิ่งเปิด AI ในตั้งค่า (หรือยังไม่เคยเปิด): เปิด worker ตอนนี้
                 self.io.loop.run_in_executor(None, ai.start)
-            self.io.submit(self.aligner.start(video_id, chosen, res.source_label, self.duration or None))
+            alts: list[Any] = []     # ฉบับอื่นของเนื้อเพลง (ให้ AI ฟังเสียงเทียบว่าฉบับไหนเข้ากับเสียงที่สุด)
+            if chosen is not None and getattr(self.settings.lyrics_sources, "audio_pick", True):
+                for c in list(getattr(res, "candidates", []))[:6]:
+                    ly = getattr(c, "lyrics", None)
+                    if ly is None or ly is chosen or len(ly.lines) < 4 or getattr(c, "score", 0.0) < 30.0:
+                        continue
+                    if getattr(ly, "source", None) == getattr(chosen, "source", None) and getattr(ly, "source_id", None) == getattr(chosen, "source_id", None):
+                        continue
+                    try:
+                        alts.append((self.lyrics.prepare_lyrics(ly, self.duration or None), self.lyrics._label(ly)))
+                    except Exception:  # noqa: BLE001
+                        continue
+                    if len(alts) >= 2:
+                        break
+            self.io.submit(self.aligner.start(video_id, chosen, res.source_label, self.duration or None, alts))
             if self.translator is not None and chosen is not None and getattr(ai_cfg, "translate", True):
                 self.io.submit(self.translator.start(video_id, chosen))
             if self.emphasizer is not None and chosen is not None:

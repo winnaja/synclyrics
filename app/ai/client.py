@@ -144,9 +144,10 @@ class AiClient:
     # ส่งงาน
     # ------------------------------------------------------------------
     def submit_align(self, video_id: str, audio_path: str, lines: list[dict[str, Any]], language: str | None,
-                     start_hint: float, handler: EventHandler) -> str:
+                     start_hint: float, handler: EventHandler, alts: list[list[dict[str, Any]]] | None = None) -> str:
         """ส่งงานจัดเวลาเนื้อเพลงจากเสียง (lines ว่าง = ถอดเสียงเป็นเนื้อเพลง) คืน job_id · handler รับ event ของงานนี้ทุกตัว"""
-        payload = {"video_id": video_id, "audio_path": audio_path, "lines": lines, "language": language, "start_hint": start_hint}
+        payload = {"video_id": video_id, "audio_path": audio_path, "lines": lines, "language": language, "start_hint": start_hint,
+                   "alts": alts or []}
         return self._submit("align_song", payload, handler)
 
     def submit_translate(self, video_id: str, lines: list[str], source_lang: str | None, target_lang: str, handler: EventHandler) -> str:

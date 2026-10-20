@@ -322,6 +322,7 @@ class LyricsSourceSettings(_Model):
     src_netease: bool = True
     src_qqmusic: bool = True
     src_youtube_subs: bool = True
+    audio_pick: bool = True                             # ให้ AI ฟังเสียงเทียบเนื้อเพลงหลายฉบับ แล้วเลือกฉบับที่เข้ากับเสียงที่สุด
     split_long_lines: bool = True                       # ตัดบรรทัดเนื้อเพลงที่ยาวเกินเป็นบรรทัดสั้น (ที่วรรคตอน/คำเชื่อม) แบบ Apple Music
     max_line_width: int = Field(46, ge=20, le=120)      # ความกว้างสูงสุดของบรรทัด (ตัวอักษรกว้าง CJK นับ 2)
 

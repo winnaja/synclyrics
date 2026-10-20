@@ -292,9 +292,11 @@ class Worker:
         acfg = self.mcfg.get("analysis", {})
         win_s, ctx_s, sr = float(acfg.get("window_s", 30.0)), float(acfg.get("context_s", 3.0)), int(acfg.get("sample_rate", 44100))
         max_song = float(acfg.get("max_song_s", 900.0))
-        lines_in = [InLine(words=list(ln["words"]), start=ln.get("start"), end=ln.get("end"),
-                           word_times=[tuple(x) for x in ln["word_times"]] if ln.get("word_times") else None)
-                    for ln in p.get("lines", [])]
+        def mk_lines(raw: list[dict[str, Any]]) -> list[Any]:
+            return [InLine(words=list(ln["words"]), start=ln.get("start"), end=ln.get("end"),
+                           word_times=[tuple(x) for x in ln["word_times"]] if ln.get("word_times") else None) for ln in raw]
+
+        lines_in = mk_lines(p.get("lines", []))
         mode = "match" if lines_in else "transcribe"
         language = p.get("language")
         stems_dir = Path(self.cfg["stems_dir"]) / vid
@@ -381,6 +383,7 @@ class Worker:
             # CTC ทั้งเพลง (เสียงร้อง + ข้อความเนื้อเพลงตรงๆ) เป็นอันดับแรก: เร็ว (~1 วิ/เพลง) และวัดได้แม่นกว่าเส้นทาง Whisper (เฉลยรายคำ: ≤0.3 วิ 86% เทียบ 79%)
             # ใช้เมื่อผ่านการตรวจกับเวลาเดิมของเนื้อเพลง ไม่ผ่าน (โครงสร้างต่าง/ไม่มีเวลาเดิม) = เส้นทาง Whisper + MMS เดิม
             res = None
+            alt_idx = 0
             if acfg.get("ctc_first", True):
                 voice16 = vocals16[:int(duration * 16000)] if cached is None else self._load_vocals(stems_dir)
                 mms = self.mms() if voice16 is not None else None
@@ -389,7 +392,24 @@ class Worker:
                         from app.ai.pipeline import align as _align
                         from app.ai.pipeline.match import ctc_to_result
 
-                        res = ctc_to_result(_align.align_global(mms, voice16, [ln.words for ln in lines_in], language), lines_in)
+                        from app.ai.pipeline.match import ctc_score
+
+                        # ผู้สมัครเนื้อเพลง: ฉบับหลัก + ฉบับสำรอง — ให้เสียงเป็นกรรมการ (คะแนน CTC สูงสุดและผ่านการตรวจเวลา)
+                        cands = [lines_in] + [mk_lines(a) for a in p.get("alts", [])]
+                        scored: list[tuple[int, Any, float]] = []
+                        for ci, lns in enumerate(cands):
+                            g = _align.align_global(mms, voice16, [ln.words for ln in lns], language)
+                            scored.append((ci, ctc_to_result(g, lns), ctc_score(g, lns)))
+                        main_score = scored[0][2]
+                        ok = [t for t in scored if t[1] is not None]
+                        pick = None
+                        if ok:
+                            best = max(ok, key=lambda t: t[2])
+                            main_ok = scored[0][1] is not None
+                            pick = best if (not main_ok or best[0] == 0 or best[2] >= main_score * 1.15) else scored[0]
+                        if pick is not None:
+                            res, alt_idx = pick[1], pick[0]
+                            lines_in = cands[alt_idx]
                     except Exception as e:  # noqa: BLE001 — เช่น VRAM ไม่พอ: ใช้เส้นทาง Whisper
                         self.emit("degraded", {"reason": f"CTC ทั้งเพลงไม่สำเร็จ: {e}", "action": "ใช้ Whisper + MMS รายบรรทัด"})
                         res = None
@@ -423,6 +443,7 @@ class Worker:
             data = {"video_id": vid, "coverage": 1.0 if all_words else 0.0, "offset_s": None, "scale": None, "notes": [],
                     "lines": [{"i": i, "start": ln.start, "end": ln.end, "text_words": ln.words, "resolved": True, "quality": 1.0,
                                "words": [[a, b, 0.8] for a, b in (ln.word_times or [])]} for i, ln in enumerate(auto)]}
+        data["alt"] = alt_idx if mode == "match" else 0
         data.update({"mode": mode, "language": language, "duration": duration, "vocal_segments": [list(s) for s in vsegs],
                      "transcript_words": len(all_words)})
         if acfg.get("snap_to_voice", True):

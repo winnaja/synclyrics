@@ -109,6 +109,20 @@ def _transcript_stream(words: list[TWord]) -> tuple[str, list[tuple[float, float
     return "".join(chars), times, probs
 
 
+def ctc_score(glob: list[list[tuple[float, float, float]] | None], lines: list[InLine]) -> float:
+    """เนื้อเพลงฉบับนี้เข้ากับเสียงแค่ไหน (CTC ทั้งเพลง): ความมั่นใจเฉลี่ยของคำ ถ่วงน้ำหนักด้วยจำนวนตัวอักษร — ใช้เปรียบเทียบฉบับต่างๆ ของเพลงเดียวกัน
+    (ตัวเลขสัมบูรณ์ต่ำมากแม้ฉบับถูก ~0.2 จึงใช้เทียบกันเองเท่านั้น) · ไม่มีผลเลย = 0"""
+    num = den = 0.0
+    for g, ln in zip(glob, lines):
+        if not g:
+            continue
+        for (_s, _e, c), w in zip(g, ln.words):
+            n = max(1, len(norm_chars(w)))
+            num += float(c) * n
+            den += n
+    return num / den if den else 0.0
+
+
 def ctc_to_result(glob: list[list[tuple[float, float, float]] | None], lines: list[InLine], tol_s: float = 1.5, min_frac: float = 0.7,
                   min_lines: int = 4) -> MatchResult | None:
     """ผล CTC แบบทั้งเพลง (align_global: เสียงร้อง + ข้อความเนื้อเพลง ไม่พึ่ง Whisper) -> MatchResult ถ้า "เชื่อถือได้"

@@ -228,6 +228,7 @@ class LyricsAligner:
         self.on_mismatch = on_mismatch
         self.algo = int(models_config.get("analysis", {}).get("algo_version", 1))
         self._base: dict[str, tuple[Lyrics, str]] = {}       # video_id -> (เนื้อเพลงฐานที่กำลังจัด, ป้ายแหล่ง)
+        self._alts: dict[str, list[tuple[Lyrics, str]]] = {}
         self._jobs: dict[str, str] = {}                      # video_id -> job_id ปัจจุบัน
 
     # ---------- DB ----------
@@ -271,24 +272,28 @@ class LyricsAligner:
     def _publish(self, video_id: str, lyrics: Lyrics, label: str, final: bool, **extra: Any) -> None:
         self.bus.publish(ev.LYRICS_RETIMED, {"video_id": video_id, "lyrics": lyrics, "source_label": label, "final": final, **extra})
 
-    async def start(self, video_id: str, lyrics: Lyrics | None, source_label: str, duration: float | None) -> None:
+    async def start(self, video_id: str, lyrics: Lyrics | None, source_label: str, duration: float | None,
+                    alts: list[tuple[Lyrics, str]] | None = None) -> None:
         """เรียกเมื่อได้เนื้อเพลงสุดท้ายของเพลงนี้ (lyrics=None = ไม่พบเลย -> ถอดเสียงเป็นเนื้อเพลง)"""
         try:
-            await self._start(video_id, lyrics, source_label, duration)
+            await self._start(video_id, lyrics, source_label, duration, alts or [])
         except asyncio.CancelledError:
             raise
         except Exception:  # noqa: BLE001 — AI พังไม่กระทบเนื้อเพลงที่แสดงอยู่
             log.exception("จัดเวลาด้วย AI ไม่สำเร็จ")
 
-    async def _start(self, video_id: str, lyrics: Lyrics | None, source_label: str, duration: float | None) -> None:
+    async def _start(self, video_id: str, lyrics: Lyrics | None, source_label: str, duration: float | None,
+                     alts: list[tuple[Lyrics, str]]) -> None:
         self.cancel(video_id)
+        self._alts[video_id] = alts if lyrics is not None else []
         key = lyrics_key(lyrics) if lyrics is not None and lyrics.lines else "transcribe"
         if lyrics is not None and not lyrics.lines:
             return
         # 1) ผลที่เคยทำไว้
         cached = await asyncio.to_thread(self._load_cached, video_id, key)
         if cached is not None:
-            self._finish(video_id, lyrics, source_label, cached, from_cache=True)
+            base, label = self._pick_base(video_id, lyrics, source_label, cached)
+            self._finish(video_id, base, label, cached, from_cache=True)
             return
         # 2) รอ AI พร้อม
         waited = 0.0
@@ -318,7 +323,8 @@ class LyricsAligner:
             self._on_event(video_id, key, msg, tmp_dir, duration)
 
         self._jobs[video_id] = "pending"   # ตั้งก่อนส่ง: ผลที่กลับมาเร็วมาก (cache) ต้องไม่ถูกทิ้งเพราะยังไม่มี job
-        self._jobs[video_id] = self.ai.submit_align(video_id, audio_path, lines, language, hint, handler)
+        alt_lines = [lyrics_to_input(a) for a, _lbl in self._alts.get(video_id, [])]
+        self._jobs[video_id] = self.ai.submit_align(video_id, audio_path, lines, language, hint, handler, alt_lines)
         self.bus.publish(ev.AI_STATUS, {"video_id": video_id, "state": "analyzing", "text": "AI กำลังฟังเสียงเพื่อจัดเวลา"})
 
     def _download(self, video_id: str, target: Path) -> str:
@@ -354,7 +360,18 @@ class LyricsAligner:
                 self._save(video_id, key, data)
             elif data.get("mode") in ("transcribe", "reconstruct"):
                 self._save(video_id, key, data)
+            base, label = self._pick_base(video_id, base, label, data)
             self._finish(video_id, base, label, data, from_cache=False)
+
+    def _pick_base(self, video_id: str, base: Lyrics | None, label: str, data: dict[str, Any]) -> tuple[Lyrics | None, str]:
+        """AI ฟังเสียงเทียบหลายฉบับแล้วเลือกฉบับอื่น (data["alt"] = 1..n) → ใช้ฉบับนั้นเป็นฐานของผล"""
+        k = int(data.get("alt") or 0)
+        alts = self._alts.get(video_id, [])
+        if k >= 1 and k <= len(alts):
+            lyr, lbl = alts[k - 1]
+            log.info("AI เลือกเนื้อเพลงฉบับที่เข้ากับเสียงมากกว่า", extra={"data": {"video_id": video_id, "alt": k}})
+            return lyr, f"{clean_label(lbl)} · เลือกฉบับที่ตรงกับเสียงที่สุด"
+        return base, label
 
     def _finish(self, video_id: str, base: Lyrics | None, label: str, data: dict[str, Any], from_cache: bool) -> None:
         dur = float(data.get("duration") or 0.0)
