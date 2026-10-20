@@ -389,7 +389,7 @@ class LyricsAligner:
             log.exception("เก็บข้อมูลสอนไม่สำเร็จ")
 
     def collect_data(self) -> bool:
-        return bool(getattr(self.settings_ai, "collect_data", True)) if self.settings_ai is not None else True
+        return bool(getattr(self.settings_ai, "collect_data", True)) if self.settings_ai is not None else False   # ไม่ได้ตั้งค่า (เช่นในเทสต์) = ไม่เก็บ
 
     def _pick_base(self, video_id: str, base: Lyrics | None, label: str, data: dict[str, Any]) -> tuple[Lyrics | None, str]:
         """AI ฟังเสียงเทียบหลายฉบับแล้วเลือกฉบับอื่น (data["alt"] = 1..n) → ใช้ฉบับนั้นเป็นฐานของผล"""
