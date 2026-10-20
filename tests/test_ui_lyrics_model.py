@@ -155,3 +155,16 @@ def test_line_index_at_lead_advances_only_when_previous_line_has_finished():
     assert at(2.3, 0.3) == 1      # บรรทัดแรกจบที่ 2.0 แล้ว: ขึ้นบรรทัดสองล่วงหน้า 0.2 วิ
     assert at(1.9, 0.3) == 0      # บรรทัดแรกยังร้องอยู่ ไม่ตัดก่อนจบ
     assert at(3.8, 0.3) == 1      # ติดกันไม่มีช่องว่าง: เปลี่ยนตามเวลาจริง
+
+
+def test_detect_sections_marks_repeated_block_and_time_gaps_as_boundaries():
+    from app.lyrics.sections import detect_sections
+
+    texts = ["intro one", "intro two", "verse a", "verse b", "verse c", "chorus x", "chorus y", "chorus z",
+             "bridge a", "bridge b", "chorus x", "chorus y", "chorus z"]
+    starts = [i * 3.0 for i in range(len(texts))]
+    ends = [s + 2.5 for s in starts]
+    sec = detect_sections(texts, starts, ends)
+    assert sec[5] == sec[6] == sec[7] and sec[10] == sec[11] == sec[12]     # ฮุกซ้ำเป็นก้อนเดียวกัน
+    assert sec[4] != sec[5] and sec[7] != sec[8] and sec[9] != sec[10]       # ขอบท่อนตรงที่ก้อนเริ่ม/จบ
+    assert detect_sections(["a", "b", "c"], [0, 1, 2], [1, 2, 3]) == [0, 0, 0]

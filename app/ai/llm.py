@@ -24,9 +24,11 @@ class LyricsLLM:
         self.tok = Tokenizer.from_file(str(model_dir / "tokenizer.json"))
         self.gen = ctranslate2.Generator(str(model_dir), device=device, compute_type=compute_type if device == "cuda" else "int8")
 
-    def chat(self, system: str, user: str, max_new_tokens: int = 700) -> str:
-        """ถามหนึ่งรอบ (greedy = คำตอบเดิมทุกครั้ง) คืนข้อความตอบ"""
+    def chat(self, system: str, user: str, max_new_tokens: int = 700, no_think: bool = True) -> str:
+        """ถามหนึ่งรอบ (greedy = คำตอบเดิมทุกครั้ง) คืนข้อความตอบ · no_think: ข้ามช่วง "คิดยาว" ของ Qwen3 รุ่นที่มี <think> (ไม่งั้นกินโทเคนหลายร้อยตัว)"""
         prompt = f"{IM_START}system\n{system}{IM_END}\n{IM_START}user\n{user}{IM_END}\n{IM_START}assistant\n"
+        if no_think:
+            prompt += "<think>\n\n</think>\n\n"
         ids = self.tok.encode(prompt, add_special_tokens=False).tokens
         res = self.gen.generate_batch([ids], max_length=max_new_tokens, sampling_topk=1, include_prompt_in_result=False,
                                       end_token=IM_END, repetition_penalty=1.05)

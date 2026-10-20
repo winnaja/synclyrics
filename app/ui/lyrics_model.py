@@ -110,6 +110,10 @@ def lyrics_to_rows(lyrics: Lyrics, vocal_gaps: list[tuple[float, float]] | None 
                 if gap <= 0.0:
                     start = None
         rows.append(line_to_row(ln, gap, start))
+    from app.lyrics.sections import detect_sections
+
+    for row, sec in zip(rows, detect_sections([r["text"] for r in rows], [r["start"] for r in rows], [r["end"] for r in rows])):
+        row["section"] = sec      # ท่อนของบรรทัด (ไม่ใช่ role ของ QML ใช้ในการจัดกลุ่มความสว่างเท่านั้น)
     return rows
 
 
@@ -149,6 +153,8 @@ def _linked(rows: list[dict[str, Any]], a: int, gap_s: float) -> bool:
     gap = float(rb["start"]) - float(ra["end"])
     if gap > gap_s:
         return False
+    if ra.get("section") is not None and rb.get("section") is not None and ra["section"] != rb["section"]:
+        return False                         # คนละท่อน (ขอบท่อนจากโครงสร้างเนื้อเพลง) ไม่รวมกลุ่มความสว่างข้ามกัน
     if gap < -0.1:
         return True                          # เวลาทับกันจริง (เช่นเสียงประสานร้องพร้อมกัน)
     # เวลาของบรรทัดจาก LRC มักติดกันพอดี (จบ = เริ่มบรรทัดถัดไป) จึงใช้ "เวลาติดกัน" อย่างเดียวไม่ได้ ต้องดูเหมือนประโยคต่อกันด้วย

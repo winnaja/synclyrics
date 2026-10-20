@@ -167,3 +167,11 @@ docs/handoff/PHASE-2.md และ docs/handoff/PHASE-4.md ให้ครบ แ
 - `classify_backing`: บรรทัดสั้น ≤6 คำที่เบากว่าค่ากลางของเพลง ≥6 dB (หรือสะท้อนบรรทัดข้างเคียงและเบา ≥3 dB) = เสียงประสาน → `Voice.BACKGROUND` แถวเล็ก · ปิดได้ที่ `analysis.detect_backing`
 - ยังไม่ได้ทดสอบกับเพลงจริง (Tek It ไม่มี transcript ใน cache)
 - (รอบ 9 ต่อ) `heard_extras`: คำที่ AI ได้ยินแต่ตกนอกบรรทัดเนื้อเพลงเว็บ (คอรัส/ad-lib มั่นใจ ≥0.55 ไม่เกิน 6 คำ ไม่ตรงบรรทัดเว็บ) แทรกเป็นแถวเสียงประสานตัวเล็ก (`Voice.BACKGROUND`) ตามเวลา · ปิดได้ที่ `analysis.heard_extras` · ใช้ได้กับโหมด match/reconstruct (ข้อความหลักยังมาจากเว็บ)
+
+## รอบ 10 (2026-10-21): ลองโมเดลภาษาในเครื่อง → ใช้ตัวแบ่งท่อนจากโครงสร้างเนื้อเพลงแทน
+- โหลด `jncraton/Qwen3-4B-Instruct-2507-ct2-int8` (3.8 GB) และ `Qwen3-1.7B-ct2-int8` (1.7 GB) ไว้ที่ `ai_runtime/models/llm/` · โมดูล `app/ai/llm.py` (ct2.Generator + tokenizers ไม่ต้องใช้ transformers) · `scripts/llm_lab.py`
+- 4B: ช้ามาก (~1 โทเคน/วินาที) เมื่อ AI worker ของแอป (3.8 GB) + dwm (2.5 GB) ใช้ VRAM อยู่ — 8 GB ไม่พอ ต้องให้ worker ปล่อย Whisper/Demucs/MMS ก่อนถึงจะใช้ได้ · ยังไม่ได้วัดคุณภาพ
+- 1.7B: เร็ว (30-50 tok/s, 23 วิ/เพลง 37 บรรทัด) แต่คุณภาพแย่: แบ่งท่อนเป็นก้อน 4 บรรทัดตายตัว, "backing" มั่ว, คำเน้นเดา (here, eye) → **ไม่เชื่อมเข้าระบบ**
+- ใช้ `app/lyrics/sections.py` (ก้อนบรรทัดที่ซ้ำ = ฮุก + ช่องว่างเวลา) แทน: เร็ว ผลเดิมทุกครั้ง ไม่ใช้ GPU · เพลง Creep แบ่งได้สมเหตุสมผล · `group_rows` ไม่รวมกลุ่มความสว่างข้ามขอบท่อน
+- ถ้าจะเอา LLM มาใช้จริง: 4B + ปล่อย VRAM ของโมเดลอื่นก่อน + ให้ตอบ JSON แบบกะทัดรัด + ทดสอบคุณภาพกับเพลงหลายภาษา
+- ลบไฟล์ไม่ใช้: Whisper large-v3 (2.9 GB), เสียงเพลงชั่วคราว `cache/analysis` (90 MB), `build_launcher/work`

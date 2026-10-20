@@ -28,7 +28,7 @@ def main() -> int:
 
     from app.ai.llm import SYSTEM_PROMPT, LyricsLLM, build_user_prompt, parse_analysis
 
-    model_dir = ROOT / "ai_runtime" / "models" / "llm" / "qwen3-4b-instruct-2507-ct2-int8"
+    model_dir = ROOT / "ai_runtime" / "models" / "llm" / "qwen3-1.7b-ct2-int8"
     t0 = time.time()
     llm = LyricsLLM(model_dir, "cuda")
     print(f"โหลดโมเดล {time.time() - t0:.1f}s")
