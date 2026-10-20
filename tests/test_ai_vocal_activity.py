@@ -163,3 +163,19 @@ def test_assign_singers_splits_two_clusters_and_keeps_solo_and_sparse_data():
     who2, st2 = assign_singers(solo, [3.0] * 24)
     assert not st2["multi"] and set(who2) == {0}
     assert assign_singers(embs[:5], [3.0] * 5)[1]["multi"] is False      # ข้อมูลน้อย = ไม่ตัดสิน
+
+
+def test_linefeat_boundary_and_labels_shapes_and_gap_feature():
+    import numpy as np
+
+    from app.ai.training.linefeat import BOUNDARY_DIM, LINE_DIM, boundary_features, line_break_labels, line_features
+
+    ref = [{"start": 0.0, "end": 2.0, "words": [["Hello", 0.0, 0.5], ["world,", 0.6, 1.0]]},
+           {"start": 3.0, "end": 4.0, "words": [["Hello", 3.0, 3.4], ["again", 3.5, 4.0]]}]
+    words, labels = line_break_labels(ref)
+    assert [int(x) for x in labels] == [0, 1, 0]
+    feats = boundary_features(words, None, 0.0)
+    assert feats.shape == (3, BOUNDARY_DIM) and feats[1][0] > feats[0][0]                 # ช่องว่างก่อนบรรทัดใหม่ยาวกว่า
+    assert feats[1][4] == 1.0                                                              # ลงท้ายด้วยลูกน้ำ
+    lf = line_features([{"start": 0, "end": 2, "words": ["Hello", "world"]}, {"start": 3, "end": 4, "words": ["(oh)"]}], None, 0.0)
+    assert lf.shape == (2, LINE_DIM) and lf[1][7] == 1.0 and np.isfinite(lf).all()
