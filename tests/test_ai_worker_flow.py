@@ -28,7 +28,7 @@ class Harness:
         self.rq: queue.Queue = queue.Queue()
         self.eq: queue.Queue = queue.Queue()
         cfg = {"models": {"analysis": {"window_s": 30.0, "context_s": 3.0, "sample_rate": SR, "max_song_s": 900, "min_coverage": 0.25,
-                                       "algo_version": 1},
+                                       "algo_version": 1, "batched_whisper": False, "ctc_first": False},
                           "demucs": {"enabled": True}, "whisper": {"model": "fake", "keep_loaded": True}, "align": {"enabled": False}},
                "stems_dir": str(tmp / "stems")}
         self.w = wk.Worker(self.rq, self.eq, cfg)

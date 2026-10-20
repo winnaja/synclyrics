@@ -144,6 +144,16 @@ class Worker:
             self._whisper_ctype = str(wcfg.get("compute_type"))
         return self._whisper
 
+    def whisper_pipeline(self) -> Any:
+        """faster-whisper BatchedInferencePipeline ครอบโมเดล Whisper ที่โหลดอยู่ (ถอดทั้งเพลงแบบ batch)"""
+        if getattr(self, "_wpipe", None) is None or getattr(self, "_wpipe_for", None) is not self._whisper:
+            from faster_whisper import BatchedInferencePipeline
+
+            model = self.whisper()
+            self._wpipe = BatchedInferencePipeline(model=model)
+            self._wpipe_for = model
+        return self._wpipe
+
     def mms(self) -> Any:
         """MMS_FA สำหรับเกลาเวลาคำ — โหลดไม่ได้ครั้งเดียวก็เลิกลอง (ใช้เวลาจาก Whisper ต่อ ไม่พังทั้งงาน)"""
         if self._mms is None and not self._mms_failed and self.mcfg.get("align", {}).get("enabled", True):
@@ -248,6 +258,7 @@ class Worker:
 
     def unload_whisper(self) -> None:
         self._whisper = None
+        self._wpipe = None
         if self.device == "cuda":
             self._torch.cuda.empty_cache()
 
@@ -316,29 +327,45 @@ class Worker:
             covered: list[list[float]] = []
             filled: list[tuple[float, float]] = []
             refined: dict[int, dict[str, Any]] = {}
-            for done, k in enumerate(order, 1):
+            fast = bool(acfg.get("batched_whisper", True))
+            if fast:   # Demucs ทุกช่วงก่อน แล้วถอดเสียงทั้งเพลงครั้งเดียวแบบ batch (เร็วกว่า ~4 เท่า) — ไม่มีผลทยอยระหว่างทาง แต่ทั้งงานสั้นลงมาก
                 self._check_cancel(p)
-                c0, c1 = k * win_s, min(duration, (k + 1) * win_s)
-                e0, e1 = max(0.0, c0 - ctx_s), min(duration, c1 + ctx_s)
-                seg = stereo[int(e0 * sr):int(e1 * sr)]
-                if dm is not None:
-                    seg = stems.separate_vocals(dm, seg, self.device, self.mcfg.get("demucs", {}))
-                v16 = stems.to_mono_16k(seg, sr, self.device)
-                i0 = int(e0 * 16000)
-                vocals16[i0:i0 + len(v16)] = v16
-                words, lang = transcribe.transcribe_window(wm, v16, language, wcfg, t_offset=e0)
+                # แยกเสียงร้องทั้งเพลงครั้งเดียว (Demucs หั่นช่วง 7 วิภายในเอง VRAM คงที่) — ไม่ซ้ำช่วงบริบทหัวท้ายของแบบทีละช่วง (ประหยัด ~20%)
+                voc = stems.separate_vocals(dm, stereo, self.device, self.mcfg.get("demucs", {})) if dm is not None else stereo
+                v16_all = stems.to_mono_16k(voc, sr, self.device)
+                n16 = min(len(v16_all), len(vocals16))
+                vocals16[:n16] = v16_all[:n16]
+                self.emit("progress", {"job_id": job_id, "fraction": 0.6})
+                self._check_cancel(p)
+                all_words, lang = transcribe.transcribe_full(self.whisper_pipeline(), vocals16[:int(duration * 16000)], language, wcfg)
                 language = language or lang
-                last = k == n_win - 1
-                all_words.extend(w for w in words if c0 <= (w.start + w.end) / 2 < (c1 if not last else duration + 1))
-                covered.append([c0, c1])
-                filled.append((e0, e1))
-                all_words.sort(key=lambda w: w.start)
-                if mode == "match":
-                    res = match_lines(lines_in, clean_transcript(all_words))
-                    self._refine(res, lines_in, vocals16, language, filled, refined)
-                    self.emit("result", {"job_id": job_id, "kind": "align_partial", "data": self._pack(vid, res, only_resolved=True) | {
-                        "covered": sorted(covered), "windows_done": done, "windows_total": n_win, "language": language}})
-                self.emit("progress", {"job_id": job_id, "fraction": done / n_win * 0.9})
+                covered = [[0.0, duration]]
+                filled = [(0.0, duration)]
+                self.emit("progress", {"job_id": job_id, "fraction": 0.9})
+            else:
+                for done, k in enumerate(order, 1):
+                    self._check_cancel(p)
+                    c0, c1 = k * win_s, min(duration, (k + 1) * win_s)
+                    e0, e1 = max(0.0, c0 - ctx_s), min(duration, c1 + ctx_s)
+                    seg = stereo[int(e0 * sr):int(e1 * sr)]
+                    if dm is not None:
+                        seg = stems.separate_vocals(dm, seg, self.device, self.mcfg.get("demucs", {}))
+                    v16 = stems.to_mono_16k(seg, sr, self.device)
+                    i0 = int(e0 * 16000)
+                    vocals16[i0:i0 + len(v16)] = v16
+                    words, lang = transcribe.transcribe_window(wm, v16, language, wcfg, t_offset=e0)
+                    language = language or lang
+                    last = k == n_win - 1
+                    all_words.extend(w for w in words if c0 <= (w.start + w.end) / 2 < (c1 if not last else duration + 1))
+                    covered.append([c0, c1])
+                    filled.append((e0, e1))
+                    all_words.sort(key=lambda w: w.start)
+                    if mode == "match":
+                        res = match_lines(lines_in, clean_transcript(all_words))
+                        self._refine(res, lines_in, vocals16, language, filled, refined)
+                        self.emit("result", {"job_id": job_id, "kind": "align_partial", "data": self._pack(vid, res, only_resolved=True) | {
+                            "covered": sorted(covered), "windows_done": done, "windows_total": n_win, "language": language}})
+                    self.emit("progress", {"job_id": job_id, "fraction": done / n_win * 0.9})
             vsegs = vocal_segments(vocals16[:int(duration * 16000)], 16000)
             try:
                 import numpy as _np
@@ -351,13 +378,29 @@ class Worker:
         # ---- ผลสุดท้าย ----
         self._check_cancel(p)
         if mode == "match":
-            res = match_lines(lines_in, clean_transcript(all_words))
-            if cached is None:
-                self._refine(res, lines_in, vocals16, language, filled, refined)
-            else:   # transcript จาก cache: ใช้เสียงร้องที่เก็บไว้เกลาเวลาคำ (ถ้ามีไฟล์)
-                v16 = self._load_vocals(stems_dir)
-                if v16 is not None:
-                    self._refine(res, lines_in, v16, language, [(0.0, len(v16) / 16000)], {})
+            # CTC ทั้งเพลง (เสียงร้อง + ข้อความเนื้อเพลงตรงๆ) เป็นอันดับแรก: เร็ว (~1 วิ/เพลง) และวัดได้แม่นกว่าเส้นทาง Whisper (เฉลยรายคำ: ≤0.3 วิ 86% เทียบ 79%)
+            # ใช้เมื่อผ่านการตรวจกับเวลาเดิมของเนื้อเพลง ไม่ผ่าน (โครงสร้างต่าง/ไม่มีเวลาเดิม) = เส้นทาง Whisper + MMS เดิม
+            res = None
+            if acfg.get("ctc_first", True):
+                voice16 = vocals16[:int(duration * 16000)] if cached is None else self._load_vocals(stems_dir)
+                mms = self.mms() if voice16 is not None else None
+                if mms is not None:
+                    try:
+                        from app.ai.pipeline import align as _align
+                        from app.ai.pipeline.match import ctc_to_result
+
+                        res = ctc_to_result(_align.align_global(mms, voice16, [ln.words for ln in lines_in], language), lines_in)
+                    except Exception as e:  # noqa: BLE001 — เช่น VRAM ไม่พอ: ใช้เส้นทาง Whisper
+                        self.emit("degraded", {"reason": f"CTC ทั้งเพลงไม่สำเร็จ: {e}", "action": "ใช้ Whisper + MMS รายบรรทัด"})
+                        res = None
+            if res is None:
+                res = match_lines(lines_in, clean_transcript(all_words))
+                if cached is None:
+                    self._refine(res, lines_in, vocals16, language, filled, refined)
+                else:   # transcript จาก cache: ใช้เสียงร้องที่เก็บไว้เกลาเวลาคำ (ถ้ามีไฟล์)
+                    v16 = self._load_vocals(stems_dir)
+                    if v16 is not None:
+                        self._refine(res, lines_in, v16, language, [(0.0, len(v16) / 16000)], {})
             data = self._pack(vid, res, only_resolved=False)
             data["version_mismatch"] = res.coverage < float(acfg.get("min_coverage", 0.25))
             prefer_heard = bool(acfg.get("prefer_heard", True))   # ผู้ใช้สั่ง: ใช้ "เสียงที่ AI ได้ยิน" เป็นหลัก เนื้อเพลงเว็บใช้แก้คำที่ตรงกันเท่านั้น

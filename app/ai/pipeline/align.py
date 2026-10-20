@@ -261,7 +261,8 @@ def align_global(bundle: dict[str, Any], vocals16: np.ndarray, line_words: list[
                 continue
             grp = spans[k:k + len(ids)]
             k += len(ids)
-            res.append((grp[0].start * sec, max(grp[-1].end * sec, grp[0].start * sec + 0.04), float(sum(sp.score for sp in grp) / len(grp))))
+            gs, ge = grp[0].start * sec, max(grp[-1].end * sec, grp[0].start * sec + 0.04)
+            res.append(Span(gs, ge, float(sum(sp.score for sp in grp) / len(grp)), _curve(grp, 0.0, sec, gs, ge)))
         if any(r is not None for r in res):
             out[li] = _fill_gaps(res, next(r[0] for r in res if r), next(r[1] for r in reversed(res) if r))
     return out

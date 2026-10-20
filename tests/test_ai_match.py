@@ -267,3 +267,19 @@ def test_emphasis_parse_and_pick_prefers_recurring_hook_words_and_spacing():
     picked = pick_emphasis(lines, ans)
     assert picked.get("butimacreep") == "creep"                           # คำฮุกที่ซ้ำมาก + บรรทัดซ้ำนับเป็นบรรทัดเดียว
     assert len(picked) <= 3
+
+
+def test_ctc_to_result_accepts_consistent_offset_and_rejects_scrambled_alignment():
+    from app.ai.pipeline.align import Span
+    from app.ai.pipeline.match import InLine, ctc_to_result
+
+    lines = [InLine(words=["a", "b"], start=10.0 + 5 * i, end=12.0 + 5 * i) for i in range(10)]
+    good = [[Span(10.6 + 5 * i, 11.0 + 5 * i, 0.5), Span(11.0 + 5 * i, 11.6 + 5 * i, 0.5)] for i in range(10)]     # เว็บช้ากว่า 0.6 วิคงที่
+    good[4] = [Span(40.0, 40.5, 0.3), Span(40.5, 41.0, 0.3)]                                                       # บรรทัดเดียวหลุดจากแนว
+    res = ctc_to_result(good, lines)
+    assert res is not None and res.offset_s is not None and abs(res.offset_s - 0.6) < 0.01
+    assert sum(1 for ln in res.lines if ln.resolved) == 9 and not res.lines[4].resolved
+    assert abs(res.lines[4].start - (10.0 + 20 + 0.6)) < 0.01                  # บรรทัดที่หลุด = เวลาเว็บ + ค่ากลาง
+    scrambled = [[Span(30.0 - 3 * i, 30.5 - 3 * i, 0.3), Span(30.5 - 3 * i, 31.0 - 3 * i, 0.3)] for i in range(10)]
+    assert ctc_to_result(scrambled, lines) is None                              # โครงสร้างต่าง = ใช้เส้นทาง Whisper
+    assert ctc_to_result([None] * 10, lines) is None

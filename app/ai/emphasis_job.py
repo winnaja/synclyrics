@@ -63,6 +63,7 @@ def run(worker: Any, p: dict[str, Any]) -> None:
         from app.ai.llm import LyricsLLM
 
         worker._whisper = None
+        worker._wpipe = None
         worker._demucs = None
         worker._mms = None
         if worker.device == "cuda":

@@ -109,6 +109,36 @@ def _transcript_stream(words: list[TWord]) -> tuple[str, list[tuple[float, float
     return "".join(chars), times, probs
 
 
+def ctc_to_result(glob: list[list[tuple[float, float, float]] | None], lines: list[InLine], tol_s: float = 1.5, min_frac: float = 0.7,
+                  min_lines: int = 4) -> MatchResult | None:
+    """ผล CTC แบบทั้งเพลง (align_global: เสียงร้อง + ข้อความเนื้อเพลง ไม่พึ่ง Whisper) -> MatchResult ถ้า "เชื่อถือได้"
+    ตรวจด้วยเวลาเดิมของเนื้อเพลง: ส่วนต่าง (CTC − เว็บ) ของบรรทัดส่วนใหญ่ต้องใกล้ค่ากลาง (เว็บมักเลื่อนทั้งเพลงคงที่) — ถ้าโครงสร้างเพลงต่าง/เนื้อผิด
+    ผลจะกระจายมั่ว → คืน None (ให้ใช้เส้นทาง Whisper แทน) · บรรทัดที่ไม่ผ่าน = เวลาเว็บ + ค่ากลาง (resolved=False)"""
+    timed = [i for i, ln in enumerate(lines) if ln.start is not None and i < len(glob) and glob[i]]
+    if len(timed) < max(min_lines, int(0.6 * len(lines))):
+        return None
+    deltas = {i: float(glob[i][0][0]) - float(lines[i].start) for i in timed}   # type: ignore[index,arg-type]
+    ordered = sorted(deltas.values())
+    med = ordered[len(ordered) // 2]
+    ok = {i for i, d in deltas.items() if abs(d - med) <= tol_s}
+    if len(ok) / len(timed) < min_frac:
+        return None
+    out: list[OutLine] = []
+    for i, ln in enumerate(lines):
+        g = glob[i] if i < len(glob) else None
+        if g and i in ok:
+            conf = float(sum(c for _s, _e, c in g) / len(g))
+            out.append(OutLine(float(g[0][0]), float(g[-1][1]), list(g), True, conf))
+            continue
+        if ln.start is None or not ln.words:
+            out.append(OutLine(0.0, 0.0, [], False, 0.0))
+            continue
+        end = float(ln.end if ln.end is not None else ln.start + 3.0)
+        words = _spread(ln, float(ln.start) + med, end + med)
+        out.append(OutLine(words[0][0], words[-1][1], words, False, 0.0))
+    return MatchResult(lines=out, coverage=len(ok) / max(1, len(lines)), offset_s=float(med), scale=None, notes=["ctc_global"])
+
+
 def match_lines(lines: list[InLine], transcript: list[TWord], min_block: int = MIN_BLOCK) -> MatchResult:
     """จับคู่เนื้อเพลงทั้งชุดกับ transcript คืนเวลาของทุกบรรทัด (บรรทัดละ 1 ผล ตามลำดับเดิม)"""
     # ---- สตรีมเนื้อเพลง ----

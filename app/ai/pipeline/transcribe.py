@@ -67,3 +67,26 @@ def transcribe_window(model: Any, audio: np.ndarray, language: str | None, confi
             if text:
                 words.append(TWord(text, float(w.start) + t_offset, float(w.end) + t_offset, float(w.probability)))
     return words, getattr(info, "language", language)
+
+
+def transcribe_full(pipe: Any, audio: np.ndarray, language: str | None, config: dict[str, Any]) -> tuple[list[TWord], str | None]:
+    """ถอดเสียงร้องทั้งเพลงครั้งเดียวแบบ batch (faster-whisper BatchedInferencePipeline) — วัดบนเพลง 194 วิ: 3.5 วิ เทียบ 12-16 วิของแบบทีละช่วง
+    ตัดตามช่วงมีเสียง (VAD) แล้วถอดหลายช่วงพร้อมกัน · ไม่ต่อเนื่องกับข้อความก่อนหน้า (ไม่วนซ้ำ) · เวลาเป็นเวลาสัมบูรณ์ของเสียงที่ส่งเข้ามา"""
+    if audio.size < 16000 * 0.5:
+        return [], language
+    segments, info = pipe.transcribe(
+        audio, language=language, task="transcribe", word_timestamps=True, beam_size=int(config.get("batched_beam", 1)),
+        batch_size=int(config.get("batch_size", 8)), temperature=0.0, vad_filter=True,
+        vad_parameters={"min_silence_duration_ms": 350, "speech_pad_ms": 150},
+    )
+    words: list[TWord] = []
+    for seg in segments:
+        if seg.avg_logprob < MIN_AVG_LOGPROB or seg.no_speech_prob > MAX_NO_SPEECH or is_hallucination(seg.text):
+            continue
+        for w in seg.words or []:
+            text = w.word.strip()
+            if text:
+                words.append(TWord(text, float(w.start), float(w.end), float(w.probability)))
+    words.sort(key=lambda w: w.start)
+    return words, getattr(info, "language", language)
+
