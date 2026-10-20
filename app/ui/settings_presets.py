@@ -55,7 +55,9 @@ class PresetStore:
             return f"ชื่อชุดต้องไม่ว่างและยาวไม่เกิน {MAX_NAME_LEN} ตัวอักษร"
         if cleaned not in self._presets and len(self._presets) >= MAX_PRESETS:
             return f"บันทึกได้สูงสุด {MAX_PRESETS} ชุด ลบชุดเก่าก่อน"
-        self._presets[cleaned] = {"saved_at": time.time(), "values": dict(values)}
+        # Windows นาฬิกาละเอียดแค่ ~15 ms: บันทึกถี่ๆ ได้เวลาเท่ากัน ลำดับ "ใหม่สุดก่อน" จึงต้องบังคับให้เพิ่มขึ้นเสมอ
+        latest = max((float(e.get("saved_at", 0)) for e in self._presets.values()), default=0.0)
+        self._presets[cleaned] = {"saved_at": max(time.time(), latest + 1e-3), "values": dict(values)}
         return self._write()
 
     def delete(self, name: str) -> bool:
