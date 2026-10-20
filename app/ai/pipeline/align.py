@@ -43,7 +43,16 @@ def load_model(config: dict[str, Any], device: str) -> dict[str, Any]:
     import torchaudio
 
     bundle = torchaudio.pipelines.MMS_FA
-    model = bundle.get_model(with_star=False).to(device)
+    model = bundle.get_model(with_star=False)
+    ft = config.get("finetuned") or ""
+    if ft:   # น้ำหนักที่ fine-tune กับเสียงร้อง (scripts/train_ctc.py) — ไม่มีไฟล์ = ใช้ MMS เดิม
+        import os
+
+        import torch
+
+        if os.path.exists(ft):
+            model.load_state_dict(torch.load(ft, map_location="cpu"))
+    model = model.to(device)
     model.eval()
     uroman = None
     try:

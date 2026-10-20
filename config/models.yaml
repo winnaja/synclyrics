@@ -30,6 +30,7 @@ align:                    # torchaudio MMS_FA
   global_align: false          # จัดเวลาทั้งเพลงด้วย CTC เทียบกับผล Whisper (วัดแล้วยังไม่เพิ่มบรรทัดที่จับคู่ได้ + ช้าลง ~15 วิ ปิดไว้ก่อน)
   global_min_confidence: 0.5
   global_switch_gain: 0.15
+  finetuned: ""            # ไฟล์น้ำหนัก MMS ที่ fine-tune กับเสียงร้อง (scripts/train_ctc.py) เช่น ai_runtime/models/mms_singing.pt · ว่าง = MMS เดิม
 
 whisper:                  # faster-whisper (ใช้เมื่อไม่มีเนื้อเพลง หรือไม่มีเวลาบรรทัด)
   enabled: true

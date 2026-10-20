@@ -414,6 +414,7 @@ class AlignCfg(_Model):
     global_align: bool = False   # จัดเวลาทั้งเพลงด้วย CTC เทียบกับผล Whisper (ทดลอง ปิดไว้: ยังไม่เพิ่มบรรทัดที่จับคู่ได้)
     global_min_confidence: float = 0.5
     global_switch_gain: float = 0.15
+    finetuned: str = ""          # ไฟล์น้ำหนัก MMS ที่ fine-tune กับเสียงร้อง (scripts/train_ctc.py) เช่น ai_runtime/models/mms_singing.pt · ว่าง = MMS เดิม
 
 
 class WhisperCfg(_Model):
