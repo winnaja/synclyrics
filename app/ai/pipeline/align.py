@@ -129,20 +129,47 @@ def align_line(bundle: dict[str, Any], vocals16: np.ndarray, line_start: float, 
     return _fill_gaps(out, line_start, line_end)
 
 
+CURVE_STEP_S = 0.05      # ระยะห่างจุดบนเส้นโค้งที่ส่งให้ UI
+CURVE_SIGMA_S = 0.09     # ความนุ่มของเส้นโค้ง (gaussian) — ยิ่งมากยิ่งไหลลื่น ยิ่งน้อยยิ่งตามพยางค์เป๊ะแต่กระตุก
+CURVE_MIX = 0.65         # สัดส่วนที่ตามเสียงจริง (ที่เหลือคือเส้นตรง) — กันการเติมสีกระโดดเร็ว/ค้างเมื่อ alignment รายตัวอักษรหยาบ
+
+
 def _curve(group: list[Any], t0: float, sec_per_frame: float, word_start: float, word_end: float) -> list[float] | None:
-    """token ของคำหนึ่ง -> [t0, f0, t1, f1, ...] ความคืบหน้า (สัดส่วนตัวอักษร) ตามเวลา · ตัวอักษรเดียว/สั้นเกินไป = None (ไล่เส้นตรง)"""
+    """token ของคำหนึ่ง -> [t0, f0, t1, f1, ...] ความคืบหน้า (สัดส่วนตัวอักษร) ตามเวลา · ตัวอักษรสั้นเกินไป = None (ไล่เส้นตรง)
+    ผ่านจุดกึ่งกลางของแต่ละตัวอักษร (ไม่ใช่ขอบ — ไม่มีช่วงค้าง/กระโดด) แล้วทำให้นุ่มด้วย gaussian และผสมกับเส้นตรง → เติมสีไหลลื่นแบบคลิปอ้างอิง
+    ต่อเนื่อง/เพิ่มขึ้นเสมอ (monotone) และปลายโค้งตรงกับเวลาเริ่ม/จบคำ"""
     n = len(group)
-    if n < 3 or word_end - word_start < 0.25:
+    dur = word_end - word_start
+    if n < 3 or dur < 0.25:
         return None
-    pts: list[float] = []
-    last_t = word_start
+    ts = [word_start]
+    fs = [0.0]
     for j, sp in enumerate(group):
-        ts = max(last_t, t0 + sp.start * sec_per_frame)
-        te = max(ts, t0 + sp.end * sec_per_frame)
-        pts += [round(ts, 3), j / n, round(te, 3), (j + 1) / n]
-        last_t = te
-    pts[0], pts[-2] = word_start, word_end          # ปลายโค้งตรงกับเวลาเริ่ม/จบคำ
-    return pts
+        mid = t0 + (sp.start + sp.end) / 2.0 * sec_per_frame
+        mid = min(max(mid, ts[-1] + 1e-3), word_end - 1e-3)
+        if mid <= ts[-1]:
+            continue
+        ts.append(mid)
+        fs.append((j + 0.5) / n)
+    ts.append(word_end)
+    fs.append(1.0)
+    k = max(4, int(round(dur / CURVE_STEP_S)) + 1)
+    grid = np.linspace(word_start, word_end, k)
+    raw = np.interp(grid, ts, fs)
+    sig = max(1.0, CURVE_SIGMA_S / (dur / (k - 1)))
+    half = int(sig * 3) + 1
+    kernel = np.exp(-0.5 * (np.arange(-half, half + 1) / sig) ** 2)
+    kernel /= kernel.sum()
+    padded = np.concatenate([np.full(half, raw[0]), raw, np.full(half, raw[-1])])
+    smooth = np.convolve(padded, kernel, mode="valid")
+    lin = (grid - word_start) / dur
+    mixed = CURVE_MIX * smooth + (1.0 - CURVE_MIX) * lin
+    mixed = np.maximum.accumulate(mixed)
+    mixed = (mixed - mixed[0]) / max(1e-9, mixed[-1] - mixed[0])
+    out: list[float] = []
+    for t, f in zip(grid, mixed):
+        out += [round(float(t), 3), round(float(f), 4)]
+    return out
 
 
 def _fill_gaps(spans: list[tuple[float, float, float] | None], line_start: float, line_end: float) -> list[tuple[float, float, float]] | None:

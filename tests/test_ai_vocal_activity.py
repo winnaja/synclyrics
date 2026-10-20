@@ -124,3 +124,21 @@ def test_remap_curves_stretches_curve_to_new_word_span():
 
     out = remap_curves([[1.0, 0.0, 1.5, 0.5, 2.0, 1.0], None], [[1.0, 2.0, 1.0], [3.0, 4.0, 1.0]], [[1.5, 2.5, 1.0], [3.0, 4.0, 1.0]])
     assert out[0][0] == 1.5 and out[0][-2] == 2.5 and abs(out[0][2] - 2.0) < 1e-6 and out[1] is None
+
+
+def test_word_curve_is_smooth_monotone_and_spans_the_word():
+    from types import SimpleNamespace as NS
+
+    from app.ai.pipeline.align import _curve
+
+    group, f = [], 0
+    for d in [3, 3, 15, 3, 3, 3, 3, 3, 3, 3]:
+        group.append(NS(start=f, end=f + d))
+        f += d + 1
+    cv = _curve(group, 10.0, 0.02, 10.0, 10.0 + f * 0.02)
+    ts, ps = cv[0::2], cv[1::2]
+    assert ts[0] == 10.0 and abs(ts[-1] - (10.0 + f * 0.02)) < 1e-6 and ps[0] == 0.0 and ps[-1] == 1.0
+    assert all(b >= a for a, b in zip(ps, ps[1:]))
+    slopes = [(ps[i + 1] - ps[i]) / (ts[i + 1] - ts[i]) for i in range(len(ts) - 1)]
+    avg = 1.0 / (ts[-1] - ts[0])
+    assert max(slopes) < 2.0 * avg                     # ไม่พุ่ง/กระโดดเร็วกว่าเฉลี่ยเกิน 2 เท่า
