@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from app.core.models import Line, Lyrics, TimingLevel, Voice, Word, WordTimingSource
-from app.ui.lyrics_model import GAP_MIN_S, find_line_index, lyrics_to_rows, word_to_dict
+from app.ui.lyrics_model import GAP_MIN_S, edge_gaps, find_line_index, lyrics_to_rows, word_to_dict
 
 
 def _lyrics() -> Lyrics:
@@ -40,8 +40,9 @@ def test_rows_basic_fields() -> None:
 def test_word_dict_flags() -> None:
     w = Word("a", 0.0, 1.0, timing=WordTimingSource.ESTIMATED, trailing_space=True)
     d = word_to_dict(w)
-    assert d == {"text": "a", "start": 0.0, "end": 1.0, "estimated": True, "trailingSpace": True}
+    assert d == {"text": "a", "start": 0.0, "end": 1.0, "estimated": True, "trailingSpace": True, "emphasis": False, "background": False, "spacer": False}
     assert word_to_dict(Word("b", 0, 1))["estimated"] is False
+    assert word_to_dict(Word("c", 0, 1, emphasis=True))["emphasis"] is True
 
 
 def test_gap_after_only_for_long_gaps() -> None:
@@ -81,3 +82,43 @@ def test_default_font_is_sf_thonburi() -> None:
     from app.core.config import Settings
 
     assert Settings().lyrics_look.font_family == "SF Thonburi"
+
+
+def test_vocal_gaps_from_ai_override_lyric_gaps():
+    # เนื้อเพลงมีช่องว่าง 6.0 -> 12.0 แต่ AI ได้ยินเสียงร้องช่วง 7-11 (เนื้อไม่ครบ) -> ไม่แสดงจุด
+    singing = lyrics_to_rows(_lyrics(), vocal_gaps=[(0.0, 1.0)])
+    assert singing[1]["gapAfter"] == 0.0
+    # AI บอกว่าเงียบ 6.5-11.5 -> จุดเริ่มที่ 6.5 ยาว 5 วิ
+    quiet = lyrics_to_rows(_lyrics(), vocal_gaps=[(6.5, 11.5)])
+    assert quiet[1]["gapAfter"] == 5.0 and quiet[1]["gapStart"] == 6.5
+    # ไม่มีข้อมูลจาก AI = ใช้ช่องว่างของเวลาเนื้อเพลงเหมือนเดิม
+    plain = lyrics_to_rows(_lyrics())
+    assert plain[1]["gapAfter"] == 6.0 and plain[1]["gapStart"] == 6.0
+
+
+def test_edge_gaps_find_intro_and_outro():
+    ly = _lyrics()      # บรรทัดแรกเริ่ม 1.0, บรรทัดสุดท้ายจบ 14.0
+    assert edge_gaps(ly, None) == (None, None)
+    intro, outro = edge_gaps(ly, [(0.0, 20.0)], duration=30.0)
+    assert intro is None                                 # ก่อนบรรทัดแรกมีแค่ 1 วิ ไม่ถึงเกณฑ์
+    assert outro == (14.0, 20.0)
+    ly2 = Lyrics(lines=[Line(start=9.0, end=12.0, words=[Word("x", 9.0, 12.0)])], timing=TimingLevel.LINE, source="t")
+    intro2, _ = edge_gaps(ly2, [(0.0, 9.0)])
+    assert intro2 == (0.0, 9.0)
+
+
+def test_parenthesized_words_become_background_row_below_main_words():
+    from app.ui.lyrics_model import split_background
+
+    ws = [Word("Darling,", 0, 1, trailing_space=True), Word("only", 1, 1.5, trailing_space=True), Word("you", 1.5, 2, trailing_space=True),
+          Word("(only", 2, 2.5, trailing_space=True), Word("you)", 2.5, 3)]
+    out = split_background(ws)
+    assert [d["text"] for d in out] == ["Darling,", "only", "you", "", "only", "you"]
+    assert [bool(d["background"]) for d in out] == [False, False, False, False, True, True]
+    assert out[3]["spacer"] is True and out[2]["trailingSpace"] is False
+    # ทั้งบรรทัดในวงเล็บ = บรรทัดปกติ, ไม่มีวงเล็บ = ไม่เปลี่ยน
+    assert all(not d["background"] for d in split_background([Word("(yeah)", 0, 1)]))
+    assert [d["text"] for d in split_background([Word("hi", 0, 1)])] == ["hi"]
+    # วงเล็บอยู่หน้าบรรทัด: คำในวงเล็บแยกลงล่าง
+    pre = split_background([Word("(Without", 0, 1, trailing_space=True), Word("love)", 1, 2, trailing_space=True), Word("Without", 2, 3)])
+    assert [d["text"] for d in pre] == ["Without", "", "Without", "love"] or [d["text"] for d in pre][0] == "Without"

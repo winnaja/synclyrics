@@ -29,6 +29,7 @@ class BridgeServer:
         self.bus = bus
         self._server: Any = None
         self._clients: dict[Any, FrameDecoder] = {}
+        self._relay: Any = None
 
     def start(self) -> bool:
         """เปิด server คืน False ถ้าเปิดไม่ได้ (เช่น มีโปรแกรมอีกตัวเปิดอยู่แล้ว)"""
@@ -44,6 +45,14 @@ class BridgeServer:
                 return False
         server.newConnection.connect(self._on_connection)
         self._server = server
+        # ตัวส่งข้ามเธรด: emit จาก thread ใดก็ได้ -> slot ทำงานใน UI thread (QLocalSocket ใช้ข้ามเธรดไม่ได้)
+        from PySide6.QtCore import QObject, Signal
+
+        class _Relay(QObject):
+            requested = Signal(str, object)
+
+        self._relay = _Relay()
+        self._relay.requested.connect(self._send_now)
         return True
 
     def stop(self) -> None:
@@ -64,6 +73,7 @@ class BridgeServer:
 
     def _on_disconnected(self, sock: Any) -> None:
         self._clients.pop(sock, None)
+        self.bus.publish(BRIDGE_MESSAGE, {"type": "_disconnected", "payload": {}, "id": "", "client": id(sock)})
         sock.deleteLater()
 
     def _on_ready(self, sock: Any) -> None:
@@ -80,11 +90,23 @@ class BridgeServer:
 
     # ---------- ส่งข้อความ ----------
     def send(self, type_: str, payload: dict[str, Any]) -> None:
-        """ส่งข้อความถึงส่วนขยายทุกตัวที่เชื่อมอยู่ (UI thread เท่านั้น)"""
-        frame = encode_frame(Envelope.new(type_, payload))
+        """ส่งข้อความถึงส่วนขยายทุกตัวที่เชื่อมอยู่ — เรียกจาก thread ใดก็ได้"""
+        if self._relay is not None:
+            self._relay.requested.emit(type_, payload)
+
+    def _send_now(self, type_: str, payload: Any) -> None:
+        """ส่งจริง (UI thread) — ข้อความใหญ่เกินหรือ socket พัง log แล้วข้าม"""
+        try:
+            frame = encode_frame(Envelope.new(type_, payload))
+        except MessageError as e:
+            log.warning("bridge: ส่งไม่ได้", extra={"data": {"err": str(e), "type": type_}})
+            return
         for sock in list(self._clients):
-            sock.write(frame)
-            sock.flush()
+            try:
+                sock.write(frame)
+                sock.flush()
+            except Exception:
+                log.exception("bridge: เขียน socket ไม่สำเร็จ")
 
 
 def notify_existing_instance(argv: list[str]) -> bool:

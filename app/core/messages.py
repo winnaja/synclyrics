@@ -33,23 +33,24 @@ MAX_MESSAGE_BYTES = 1024 * 1024
 # ---------------------------------------------------------------------------
 EXT_TO_APP: frozenset[str] = frozenset({
     "hello",            # {ext_version, browser}  ส่งทันทีที่เชื่อมต่อ (wizard รอข้อความนี้)
-    "play_now",         # {track: TrackRef, start_at?: float}  "เล่นเลย" / "เปิดในแอป"
+    "play_now",         # {track: TrackRef, start_at?: float, held?: bool}  "เล่นเลย" / "เปิดในแอป" (held = ส่วนขยายหยุดแท็บไว้แล้วรอแอป)
     "enqueue",          # {tracks: [TrackRef], position: "end" | "next"}
     "enqueue_playlist", # {playlist_id, title, tracks: [TrackRef]}
     "up_next",          # {tracks: [TrackRef]}  รายการ Up next ของหน้าที่เปิดอยู่
-    "companion_state",  # {video_id, current_time, rate, paused, sent_at_ms, seeked}
+    "companion_state",  # {video_id, current_time, rate, paused, sent_at_ms, seeked, duration?, volume?, muted?}
     "companion_track",  # {track: TrackRef}  เพลงเปลี่ยนในโหมดคู่หู
-    "command",          # {name: "play_pause"|"next"|"automix_toggle"|"open_settings"|"focus"}
+    "command",          # {name: "play_pause"|"next"|"prev"|"seek"|"volume"|"mute"|"set_mode"|"automix_toggle"|"open_settings"|"focus", mode?, time?, value?}
     "log",              # {level, msg, data}  log จากส่วนขยาย (เช่น selector หาไม่เจอ)
     "ping",             # {}
 })
 APP_TO_EXT: frozenset[str] = frozenset({
     "hello_ack",        # {app_version, protocol: int, mode: "app"|"companion"}
-    "status",           # {playing, video_id, title, automix}
+    "status",           # {phase: "idle"|"loading"|"ready"|"failed", playing, video_id, title, mode, queue_len}
     "toast",            # {text}  ให้ส่วนขยายแสดง toast
     "selectors",        # {data}  ส่ง config/selectors.json ล่าสุดให้ส่วนขยาย
     "reload_extension", # {}  ส่วนขยายเรียก chrome.runtime.reload()
     "pause_tab",        # {video_id}  หยุดวิดีโอในแท็บ (หลัง "เปิดในแอป")
+    "tab_control",      # {action: "play"|"pause"|"seek"|"next"|"prev"|"volume"|"mute", time?, value?}  สั่งแท็บ YouTube (โหมดคู่หู)
     "pong",             # {}
     "error",            # {code, message}
 })
@@ -59,6 +60,8 @@ APP_TO_EXT: frozenset[str] = frozenset({
 # ---------------------------------------------------------------------------
 AI_REQUESTS: frozenset[str] = frozenset({
     "warmup",           # {}  โหลดโมเดลค้างใน VRAM + warm-up ด้วยเสียงเงียบ
+    "align_song",       # {job_id, video_id, audio_path, lines: [{words,start,end,word_times?}], language?, start_hint}  จัดเวลาเนื้อเพลงจากเสียง (ทยอยทีละช่วง) — ไม่มี lines = ถอดเสียงเป็นเนื้อเพลง
+    "translate",        # {job_id, video_id, lines: [str], source_lang?, target_lang}  แปลทั้งเพลง (ใช้บริบทข้างเคียง)
     "separate_chunk",   # {job_id, video_id, pcm_path, sample_rate, start, end}  -> stems ลง cache
     "align_chunk",      # {job_id, video_id, pcm_path, stems_dir, start, end, lines, language}
     "transcribe",       # {job_id, video_id, pcm_path, start, end, language?}

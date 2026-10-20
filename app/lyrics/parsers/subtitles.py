@@ -15,7 +15,7 @@ _CUE_RE = re.compile(
     r"(?:(\d+):)?(\d{1,2}):(\d{2})[.,](\d{3})\s+-->\s+(?:(\d+):)?(\d{1,2}):(\d{2})[.,](\d{3})"
 )
 _TAG_RE = re.compile(r"<[^>]+>")
-_NOISE_RE = re.compile(r"^[\[(（【♪♫\s]*(music|instrumental|applause|เพลง|ดนตรี|เสียง.*)[\])）】♪♫\s]*$", re.I)
+_NOISE_RE = re.compile(r"^[\[(（【♪♫\s]*(music|instrumental|applause|เพลง|ดนตรี|เสียง.*)[\])）】♪♫\s]*$|^\s*[\[【][^\]】]{0,40}[\]】]\s*$", re.I)  # รวมคำบรรยายเสียงในวงเล็บเหลี่ยมล้วนๆ เช่น [Ring] [Laughter]
 
 
 def _secs(h: str | None, m: str, s: str, ms: str) -> float:

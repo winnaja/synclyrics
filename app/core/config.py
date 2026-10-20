@@ -21,12 +21,12 @@ from pathlib import Path
 from typing import Any, Literal, TypeVar
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.core.paths import AppPaths
+from app.core.paths import PROJECT_ROOT, AppPaths
 
 CURRENT_VERSIONS: dict[str, int] = {
-    "settings.yaml": 1,
+    "settings.yaml": 3,
     "models.yaml": 1,
     "automix_rules.yaml": 1,
     "selectors.json": 1,
@@ -36,6 +36,46 @@ CURRENT_VERSIONS: dict[str, int] = {
 MIGRATORS: dict[str, dict[int, Callable[[dict[str, Any]], dict[str, Any]]]] = {
     name: {} for name in CURRENT_VERSIONS
 }
+
+
+def _settings_v1_to_v2(data: dict[str, Any]) -> dict[str, Any]:
+    """v2 (2026-10-20): ค่าแอนิเมชัน/ความจาง/เบลอ ปรับใหม่ตามคลิป Apple Music ที่วัดจริง — ไฟล์ผู้ใช้เก่าเก็บค่าเดิมไว้ทุกตัว (ค่าเริ่มต้นใหม่จะไม่มีผล)
+    จึงลบคีย์เหล่านี้ออกครั้งเดียว ให้กลับไปใช้ค่าเริ่มต้นใหม่ (ผู้ใช้ปรับเองต่อได้ตามปกติหลังจากนี้)"""
+    drop = {
+        "overlay": ("anim_preset", "animation", "animation_intensity", "anim_speed", "wave_ms", "blur", "falloff", "idle_scale", "lift_px",
+                    "word_anim", "word_ease", "word_anim_ms", "word_scale", "glow_strength", "glow_color", "word_hold_ms", "word_release_ms",
+                    "emph_on", "weight_boost"),
+        "lyrics_look": ("spring_stiffness", "spring_damping"),
+        "fullwindow": ("inactive_opacity", "blur", "falloff"),
+    }
+    for group, keys in drop.items():
+        sec = data.get(group)
+        if isinstance(sec, dict):
+            for k in keys:
+                sec.pop(k, None)
+    return data
+
+
+MIGRATORS["settings.yaml"][1] = _settings_v1_to_v2
+
+
+def _settings_v2_to_v3(data: dict[str, Any]) -> dict[str, Any]:
+    """v3 (2026-10-20): word_anim เหลือ none/word/char (lift/rise/pop/glow/glow_rise เดิมแปลงเป็น word + ปริมาณลอย/ขยาย/แสงที่เทียบเท่า)"""
+    ov = data.get("overlay")
+    if isinstance(ov, dict):
+        wa = ov.get("word_anim")
+        if wa in ("lift", "rise", "pop", "glow", "glow_rise"):
+            ov["word_anim"] = "word"
+            if wa in ("lift", "rise", "glow_rise") and float(ov.get("lift_px", 0) or 0) <= 0:
+                ov["lift_px"] = 3.0
+            if wa == "pop" and float(ov.get("word_scale", 1) or 1) <= 1.0:
+                ov["word_scale"] = 1.1
+            if wa in ("glow", "glow_rise") and float(ov.get("glow_strength", 0) or 0) <= 0:
+                ov["glow_strength"] = 0.6
+    return data
+
+
+MIGRATORS["settings.yaml"][2] = _settings_v2_to_v3
 
 
 class ConfigError(Exception):
@@ -68,8 +108,8 @@ class LyricsLook(_Model):
     blur_strength: float = Field(1.0, ge=0, le=3)
     glow_strength: float = Field(1.0, ge=0, le=3)
     animation_speed: float = Field(1.0, ge=0.25, le=4)
-    spring_stiffness: float = Field(170.0, ge=10, le=1000)
-    spring_damping: float = Field(26.0, ge=1, le=200)
+    spring_stiffness: float = Field(256.0, ge=10, le=1000)
+    spring_damping: float = Field(32.0, ge=1, le=200)
     highlight_effect: Literal[
         "wipe", "glow", "bounce", "scale", "karaoke", "fade", "typewriter"
     ] = "wipe"
@@ -104,6 +144,151 @@ class DesktopLyricsSettings(_Model):
     width: int | None = None
 
 
+class OverlaySettings(_Model):
+    """หน้าต่างเนื้อเพลงลอย (ตาม add by win/UX UI.txt) — ทุกค่ามีผลทันที ไม่ต้องเปิดโปรแกรมใหม่"""
+
+    # ---- โหมดและหน้าต่าง ----
+    # minimal = บรรทัดเดียว · focus = 3 บรรทัด (ค่าเริ่มต้น) · "full" เป็นค่าเก่า (ตอนนี้โหมดเต็มคือหน้าต่างแยก FullWindowSettings;
+    # ค่านี้ยังรับได้เพื่อไม่ให้ไฟล์ตั้งค่าเก่าพัง — main.py แปลงเป็น focus ตอนเปิด)
+    mode: Literal["minimal", "focus", "full"] = "focus"
+    visible: bool = True
+    always_on_top: bool = True
+    locked: bool = False            # ล็อกตำแหน่ง/ขนาด กันลากพลาด
+    click_through: bool = False     # เมาส์ทะลุหน้าต่าง (ปิดได้จาก tray / คีย์ลัด)
+    remember_position: bool = True
+    start_position: Literal["center", "center_h", "top_center", "bottom_center", "top_left", "top_right",
+                            "bottom_left", "bottom_right"] = "bottom_center"  # ใช้เมื่อยังไม่เคยจำตำแหน่ง/ปิดการจำตำแหน่ง
+    monitor: int = Field(0, ge=0, le=15)  # จอที่ใช้ตอนเริ่ม (ลำดับตาม Windows)
+    window_opacity: float = Field(1.0, ge=0.3, le=1)  # ความโปร่งใสทั้งหน้าต่าง (UX UI ข้อ 5.2)
+    blur_behind: bool = True  # พื้นหลัง "กระจกฝ้า" ใช้เบลอฉากหลังจริงของ Windows (acrylic) — ปิด/ไม่รองรับ = พื้นโปร่งแสง
+    x: int | None = None
+    y: int | None = None
+    # ขนาดจำแยกตามโหมด
+    w_minimal: int = Field(760, ge=240, le=4000)
+    h_minimal: int = Field(110, ge=60, le=2000)
+    w_focus: int = Field(760, ge=240, le=4000)
+    h_focus: int = Field(230, ge=100, le=2000)
+    w_full: int = Field(1000, ge=420, le=4000)
+    h_full: int = Field(680, ge=320, le=2400)
+
+    # ---- ธีม / พื้นหลัง ----
+    theme: Literal["soft_dark", "pure_black", "frosted", "minimal_transparent", "light", "custom"] = "soft_dark"
+    bg_style: Literal["transparent", "frosted", "soft_dark", "solid", "gradient", "custom"] = "soft_dark"
+    bg_color: str = "#0B0B10"
+    bg_color2: str = "#1B1F3B"      # สีที่สองของ gradient
+    bg_opacity: float = Field(0.62, ge=0, le=1)       # แยกจากความโปร่งใสของตัวอักษร (UX UI ข้อ 5.2)
+    border_opacity: float = Field(0.08, ge=0, le=1)
+    shadow: float = Field(0.5, ge=0, le=1)            # เงาของหน้าต่าง
+    corner_radius: int = Field(22, ge=0, le=60)
+
+    # ---- ตัวอักษร ----
+    text_color: str = "#F5F5F7"      # บรรทัดปัจจุบัน / คำที่ร้องแล้ว
+    accent_color: str = "#A5B4FC"    # ไฮไลต์ / glow
+    inactive_color: str = "#777780"  # ยังไม่ร้อง
+    secondary_color: str = "#A1A1AA" # คำแปล / ข้อความรอง
+    text_opacity: float = Field(1.0, ge=0.2, le=1)
+    inactive_opacity: float = Field(0.5, ge=0.05, le=1)  # บรรทัดที่ไม่ใช่ปัจจุบัน
+    text_shadow: float = Field(0.6, ge=0, le=1)
+    font_size: int = Field(34, ge=12, le=120)
+    text_width: float = Field(1.0, ge=0.4, le=1.0)    # ความกว้างของข้อความเทียบกับหน้าต่าง (UX UI ข้อ 3.3 "ปรับความกว้างของข้อความ")
+    font_weight: int = Field(700, ge=100, le=900)
+    weight_boost: int = Field(100, ge=0, le=300)  # บรรทัดปัจจุบันหนาขึ้นกี่หน่วย (Weight highlight, UX UI ข้อ 4.3)
+    line_spacing: float = Field(1.15, ge=0.8, le=2.5)
+    letter_spacing: float = Field(0.0, ge=-3, le=12)
+    align: Literal["left", "center", "right"] = "center"
+    visible_lines: int = Field(3, ge=1, le=9)          # จำนวนบรรทัดที่เห็นในโหมด focus
+
+    # ---- เนื้อเพลง/แอนิเมชัน ----
+    highlight: Literal["fill", "word", "glow", "line"] = "fill"  # fill = เติมสีซ้ายไปขวา · word = ทีละคำ · glow = เรืองแสง · line = ทั้งบรรทัด
+    animation: Literal["fade_move", "fade", "move", "scale"] = "fade_move"
+    animation_intensity: float = Field(1.0, ge=0, le=2)
+    reduced_motion: bool = False
+    # ปรับแต่งแอนิเมชันเนื้อเพลงละเอียด (ผู้ใช้ขอ) — ชุดสำเร็จรูปอยู่ใน app/ui/anim_presets.py
+    # ค่าเริ่มต้น = ชุด "smooth" (นุ่มนวลแบบ Apple Music: เลื่อนช้า คลื่นหน่วง เบลอบรรทัดไกล) ให้ตรงกับ app/ui/anim_presets.py
+    anim_preset: Literal["smooth", "balanced", "bouncy", "snappy", "none", "custom"] = "smooth"
+    anim_speed: float = Field(1.0, ge=0.3, le=3.0)   # ตัวคูณความเร็ว (มาก = เร็ว)
+    wave_ms: int = Field(30, ge=0, le=150)            # คลื่น: บรรทัดที่อยู่ต่ำลงไปเริ่มไหลช้ากว่า (ms ต่อ 100 พิกเซล) — Apple Music วัดได้ ~30
+    blur: float = Field(0.35, ge=0, le=1)             # เบลอบรรทัดที่ไกลจากบรรทัดปัจจุบัน
+    falloff: float = Field(0.12, ge=0.03, le=0.3)     # ความจางต่อบรรทัดที่ไกลขึ้น
+    idle_scale: float = Field(0.92, ge=0.6, le=1.0)   # ขนาดบรรทัดที่ไม่ใช่ปัจจุบัน (แอนิเมชันจาง+เลื่อน)
+    lift_px: float = Field(0.0, ge=0, le=14)          # ลอยขึ้นกี่พิกเซล (0 = ไม่ลอย) — ใช้กับ word_anim "word"/"char"
+    # แอนิเมชันระดับ "คำ" (คาราโอเกะ) — ผู้ใช้ว่าเด้งอย่างเดียวไม่สวย จึงมีหลายแบบ
+    # none = เติมสีอย่างเดียว · word = ทั้งคำลอย/ขยาย/เรืองแสงทันทีที่ถึงคำ (ไม่รอร้องจบ) · char = ทีละตัวอักษรตามขอบการเติมสี
+    # ปริมาณของแต่ละอย่างเป็นอิสระต่อกัน (lift_px / word_scale / glow_strength — 0 หรือ 1.0 = ไม่ใช้) ใช้ร่วมกันได้
+    word_anim: Literal["none", "word", "char"] = "none"   # ค่าเริ่มต้น = เติมสีขอบนุ่มอย่างเดียว ตามคลิป Apple Music
+    word_ease: Literal["smooth", "gentle", "spring", "linear"] = "smooth"
+    word_anim_ms: int = Field(420, ge=60, le=1200)    # ระยะเวลาเคลื่อนไหวของคำ
+    word_scale: float = Field(1.0, ge=1.0, le=1.35)  # ขยายกี่เท่า (1.0 = ไม่ขยาย)
+    word_stay: bool = True                            # ค้างสถานะลอย/ขยาย/เรืองแสงไว้จนจบบรรทัด (ปิด = คืนหลัง word_hold_ms)
+    glow_strength: float = Field(0.0, ge=0, le=1)     # ความแรงของแสง (0 = ไม่มี) — เรืองเฉพาะส่วนที่เติมสีแล้ว
+    glow_color: str = "#FFFFFF"                       # สีของแสงเรืองรอบคำ (รวมคำเน้น)
+    word_hold_ms: int = Field(250, ge=0, le=2000)     # ร้องคำนั้นจบแล้วค้างสถานะ "ลอย/เรืองแสง" ต่ออีกกี่ ms ก่อนเริ่มคืน
+    word_release_ms: int = Field(700, ge=0, le=3000)  # ใช้เวลาคืนกลับ (ลอยลง/แสงค่อยๆ ลด) กี่ ms
+    # คำเน้น (แบบ Apple Music): คำที่ลากเสียงยาว (หรือที่ตัวตรวจจับ/AI ในเฟส 4 ระบุ emphasis) เรืองแสง+ขยายตอนร้อง
+    emph_on: bool = False   # คำเน้น (เรืองแสง+ขยาย) ปิดไว้ตามคลิปอ้างอิง — เปิดเองได้ที่ตั้งค่า > แอนิเมชัน
+    emph_min_s: float = Field(1.2, ge=0.4, le=4.0)    # คำที่ยาวตั้งแต่กี่วินาทีถือเป็นคำเน้น
+    emph_glow: float = Field(0.9, ge=0, le=1)
+    emph_scale: float = Field(1.08, ge=1.0, le=1.3)
+    group_lines: bool = True                          # บรรทัดที่ร้องต่อเนื่องเป็นท่อนเดียวกัน ค้างความสว่างไว้แล้วจางพร้อมกันเมื่อจบท่อน
+    group_gap_s: float = Field(0.6, ge=0.1, le=2.0)   # ช่องว่างสูงสุดระหว่างบรรทัดที่ยังนับเป็นท่อนเดียวกัน (ถ้าดูเป็นประโยคต่อ)
+    auto_scroll: bool = True
+    resume_s: float = Field(3.0, ge=1, le=15)       # เลื่อนอ่านเองแล้วกลับไปตามเพลงใน (วินาที)
+    click_seek: bool = True                          # คลิกบรรทัดเพื่อกรอ YouTube ไปที่บรรทัดนั้น
+    show_source: bool = True                         # แสดงป้ายแหล่งเนื้อเพลง
+    translation_size: float = Field(0.55, ge=0.3, le=1.2)
+    show_translation: bool = True   # สวิตช์หลัก (แสดงเฉพาะเมื่อมีคำแปลและเป็นภาษาไทย หรือผู้ใช้กดเปิดเอง)
+    hover_controls: bool = True     # แถบควบคุมเล็กๆ ตอนเอาเมาส์ชี้ (UX UI ข้อ 8.1)
+
+
+class FullWindowSettings(_Model):
+    """หน้าต่างโหมดเต็ม (แบบ Apple Music): หน้าต่างปกติมีแถบชื่อ ย่อ/ขยาย/ปิดได้ + เต็มจอ (F/F11) · ปกใหญ่ซ้าย เนื้อเพลงใหญ่ขวา
+    พื้นหลังไหลลื่นสีจากปก (fluid shader) · แถบควบคุมซ่อนเองเมื่อไม่ขยับเมาส์ตอนเต็มจอ"""
+
+    open: bool = True                                 # เปิดโปรแกรมมาแล้วเห็นโหมดเต็มเป็นหน้าแรก
+    start_full: bool = True                           # True = ทุกครั้งที่เปิดโปรแกรมให้เปิดโหมดเต็มก่อน (แม้ครั้งก่อนปิดไว้)
+    fullscreen: bool = False
+    maximized: bool = True                            # เริ่มแบบขยายเต็มจอ (maximize มีแถบชื่อ/แถบงาน ไม่ใช่ fullscreen) · ย่อกลับแล้วจำขนาดเดิม
+    x: int | None = None
+    y: int | None = None
+    w: int = Field(1180, ge=640, le=7680)
+    h: int = Field(740, ge=420, le=4320)
+    background: Literal["fluid", "solid"] = "fluid"
+    brightness: float = Field(0.85, ge=0.3, le=1.3)   # ความสว่างพื้นหลัง fluid
+    font_scale: float = Field(1.0, ge=0.5, le=2.0)    # คูณกับขนาดตัวอักษรอัตโนมัติ (ตามความสูงหน้าต่าง)
+    lyrics_visible: bool = True                       # False = ซ่อนเนื้อเพลง ดูแต่ปก (ปกขยายใหญ่กึ่งกลาง) — ปุ่มไอคอนเนื้อเพลง
+    align: Literal["left", "center"] = "left"         # การจัดวางเนื้อเพลง (Apple Music = ชิดซ้าย)
+    cover_scale: float = Field(1.0, ge=0.6, le=1.3)   # ขนาดปกเทียบกับค่าอัตโนมัติ
+    show_volume: bool = True                          # แถบวอลลุ่มใต้ปุ่มควบคุม
+    show_translation: bool = True
+    inactive_opacity: float = Field(0.45, ge=0, le=1)  # ความสว่างของบรรทัดที่ไม่ได้ร้อง (0 = มองไม่เห็นเลย) · 0.45 × คำที่ยังไม่ร้อง 40% ≈ 18% ตรงกับที่วัดจากคลิป Apple Music
+    blur: float = Field(0.7, ge=0, le=1)              # เบลอบรรทัดที่ไม่ได้ร้อง ยิ่งไกลยิ่งเบลอ (แบบ Apple Music: บรรทัดที่ 3 ขึ้นไปเบลอเต็มที่)
+    falloff: float = Field(0.01, ge=0, le=0.3)        # จางเพิ่มต่อบรรทัดที่ไกลจากบรรทัดที่ร้อง (Apple Music: บรรทัดไกลๆ สว่างเท่ากัน ~17%)
+    # สีเนื้อเพลงของโหมดเต็ม (แยกจากหน้าต่างลอย — สี ov_* ใช้กับหน้าต่างลอยเท่านั้น)
+    text_color: str = "#FFFFFF"       # บรรทัด/คำที่ร้องแล้ว
+    accent_color: str = "#FFFFFF"     # ไฮไลต์แบบเรืองแสง/ทีละคำ
+    inactive_color: str = "#FFFFFF"   # บรรทัดที่ไม่ได้ร้อง (ความจางตั้งแยก)
+    secondary_color: str = "#FFFFFF"  # คำแปล
+    edge_blur: float = Field(0.8, ge=0, le=1)         # เบลอเพิ่มที่ขอบบน/ล่าง (ใช้คู่กับ edge_fade)
+    edge_fade: float = Field(0.14, ge=0, le=0.4)     # เนื้อเพลงเบลอ/จางหายก่อนถึงขอบบน-ล่าง (สัดส่วนความสูง) แบบ Apple Music
+    idle_hide: bool = True                            # ซ่อนปุ่มบน/ป้ายแหล่งเนื้อเพลงเมื่อไม่ขยับเมาส์ (ทั้งหน้าต่างปกติและเต็มจอ)
+    idle_hide_s: float = Field(3.0, ge=1, le=60)      # ไม่ขยับเมาส์กี่วินาทีแล้วซ่อน (เต็มจอซ่อนเมาส์ด้วย)
+
+
+class HotkeySettings(_Model):
+    """คีย์ลัดทั้งระบบ (ใช้ได้แม้ไม่ได้โฟกัสโปรแกรม) รูปแบบ "Ctrl+Alt+L" — ว่าง = ปิด"""
+
+    show_hide: str = "Ctrl+Alt+L"
+    click_through: str = "Ctrl+Alt+K"
+    lock: str = "Ctrl+Alt+O"
+    full_toggle: str = "Ctrl+Alt+F"  # เปิด/ปิดหน้าต่างโหมดเต็ม
+    translation: str = "Ctrl+Alt+T"
+    font_up: str = "Ctrl+Alt+Up"
+    font_down: str = "Ctrl+Alt+Down"
+    offset_later: str = "Ctrl+Alt+Right"    # เนื้อเพลงช้าลง 0.1 วิ
+    offset_earlier: str = "Ctrl+Alt+Left"   # เนื้อเพลงเร็วขึ้น 0.1 วิ
+    offset_reset: str = "Ctrl+Alt+0"
+
+
 class LyricsSourceSettings(_Model):
     # ชื่อ plugin -> เปิด/ปิด (plugin ที่ไม่มีในนี้ใช้ค่า enabled_by_default ของมันเอง)
     enabled: dict[str, bool] = {}
@@ -111,6 +296,9 @@ class LyricsSourceSettings(_Model):
 
 
 class PlaybackSettings(_Model):
+    # False = แอปแสดงเนื้อเพลงอย่างเดียว ไม่เล่นเสียง ไม่เปิดอุปกรณ์เสียง (ผู้ใช้สั่ง 2026-10-20: เล่นใน YouTube เท่านั้น)
+    # True = โค้ดโหมดแอปเดิม (เล่นเสียงเอง/คิว) ซึ่งเก็บไว้เผื่อเฟส 5-7 — ปิดอยู่ทั้งใน UI และส่วนขยาย
+    app_audio: bool = False
     preload_at_percent: int = Field(50, ge=5, le=95)
     first_chunk_s: float = Field(25.0, ge=10, le=60)
     cache_max_gb: float = Field(10.0, ge=0.5, le=500)
@@ -140,18 +328,31 @@ class AutomixSettings(_Model):
     transition_strength: float = Field(1.0, ge=0, le=2)
 
 
+class AiSettings(_Model):
+    """AI ฟังเสียงเบื้องหลัง (เฟส 4) — ค่าละเอียดของโมเดลอยู่ใน models.yaml"""
+
+    enabled: bool = True     # ให้ AI ฟังเสียงจริงเพื่อจัดเวลาเนื้อเพลง (ปิด = ใช้เวลาจากแหล่ง/ประมาณล้วน ไม่ใช้ GPU)
+    translate: bool = True   # แปลเนื้อเพลงที่ไม่ใช่ภาษาไทยเป็นไทยด้วย AI
+
+
 class StartupSettings(_Model):
     launch_with_windows: bool = False
     minimize_to_tray: bool = True
+    close_to_tray: bool = True   # กดปิดหน้าต่างหลัก/ตั้งค่า = ซ่อนลง tray (False = ปิดโปรแกรม)
+    language: Literal["th", "en"] = "th"
     open_browser: Literal["youtube", "youtube_music", "none"] = "youtube"
     extension_sends_current_video: bool = True
 
 
 class Settings(_Model):
-    version: int = 1
+    version: int = 3
     lyrics_look: LyricsLook = LyricsLook()
     background: BackgroundSettings = BackgroundSettings()
     desktop_lyrics: DesktopLyricsSettings = DesktopLyricsSettings()
+    overlay: OverlaySettings = OverlaySettings()
+    fullwindow: FullWindowSettings = FullWindowSettings()
+    hotkeys: HotkeySettings = HotkeySettings()
+    ai: AiSettings = AiSettings()
     lyrics_sources: LyricsSourceSettings = LyricsSourceSettings()
     playback: PlaybackSettings = PlaybackSettings()
     automix: AutomixSettings = AutomixSettings()
@@ -177,6 +378,9 @@ class AlignCfg(_Model):
     fp16: bool = True
     batch_lines: int = 16
     min_confidence: float = 0.45  # ต่ำกว่านี้ใช้เวลาแบบประมาณแทน (ข้อ 5.1 ขั้น 8)
+    global_align: bool = False   # จัดเวลาทั้งเพลงด้วย CTC เทียบกับผล Whisper (ทดลอง ปิดไว้: ยังไม่เพิ่มบรรทัดที่จับคู่ได้)
+    global_min_confidence: float = 0.5
+    global_switch_gain: float = 0.15
 
 
 class WhisperCfg(_Model):
@@ -184,7 +388,7 @@ class WhisperCfg(_Model):
     model: str = "large-v3-turbo"
     compute_type: str = "float16"
     fallback_compute_type: str = "int8_float16"
-    keep_loaded: bool = False  # False = โหลดเฉพาะตอนใช้แล้ว unload (ประหยัด VRAM)
+    keep_loaded: bool = True  # True = ค้างใน VRAM (เร็ว) · False = โหลดเฉพาะตอนใช้แล้ว unload (ประหยัด VRAM)
     beam_size: int = 5
 
 
@@ -201,12 +405,38 @@ class ProgressiveCfg(_Model):
     analysis_deadline_before_mix_s: float = 30.0
 
 
+class TranslateCfg(_Model):
+    enabled: bool = True
+    model: str = "JustFrederik/nllb-200-distilled-1.3B-ct2-int8"
+    target_lang: str = "tha_Thai"
+    beam_size: int = 4
+    keep_loaded: bool = False
+
+
+class AnalysisCfg(_Model):
+    """การวิเคราะห์เสียงเบื้องหลังเพื่อจัดเวลาเนื้อเพลง (แอปไม่เล่นเสียงเอง — โหลดเสียงมาวิเคราะห์อย่างเดียว)"""
+
+    enabled: bool = True
+    max_song_s: float = 900.0   # ยาวกว่านี้ไม่ใช่เพลง (พอดแคสต์/ไลฟ์) ข้าม
+    sample_rate: int = 44100    # ความถี่ที่ถอดรหัสให้ Demucs (Whisper/MMS ลดเป็น 16k เอง)
+    window_s: float = 30.0      # ขนาดช่วงที่ประมวลผลทีละครั้ง (ทยอยส่งผลทีละช่วง)
+    context_s: float = 3.0      # ซ้อนหัวท้ายแต่ละช่วงให้ Demucs/Whisper เห็นบริบท
+    min_coverage: float = 0.25  # จับคู่เนื้อเพลงกับเสียงได้น้อยกว่านี้ = เนื้อเพลงอาจเป็นคนละเวอร์ชัน
+    prefer_heard: bool = True        # แสดงตามเสียงที่ AI ได้ยินเป็นหลัก (เนื้อเพลงเว็บใช้แก้คำที่ตรงกัน) · False = ยึดเนื้อเพลงเว็บแล้วจัดเวลา
+    reconstruct_below: float = 0.5   # จับคู่ตามลำดับได้น้อยกว่านี้ ลองสร้างบรรทัดตามลำดับที่ร้องจริง (รีมิกซ์/โครงสร้างต่าง)
+    reconstruct_gain: float = 0.08   # ใช้ผลที่สร้างตามเสียงจริงเมื่อจับคู่ข้อความได้มากกว่าแบบเรียงลำดับอย่างน้อยเท่านี้
+    algo_version: int = 1       # เปลี่ยนเมื่อวิธีจัดเวลาเปลี่ยน -> ผลที่เก็บไว้เก่าหมดอายุ
+
+
 class ModelsConfig(_Model):
     version: int = 1
+    preload: bool = True  # โหลด Demucs/Whisper ค้างใน VRAM ตอนเปิดโปรแกรม (ไม่บล็อก UI) · VRAM ว่าง < 3.5 GB ข้าม
+    site_dir: str = ""    # โฟลเดอร์ site-packages ของ AI (torch ฯลฯ) ที่ worker ต่อเข้า sys.path · ว่าง = <โปรเจกต์>/ai_runtime/site ถ้ามี ไม่งั้นใช้ของ .venv หลัก
+    model_dir: str = ""   # ที่เก็บน้ำหนักโมเดล (HF_HOME/TORCH_HOME) · ว่าง = <โปรเจกต์>/ai_runtime/models ถ้ามี · path สัมพัทธ์อิงโฟลเดอร์โปรเจกต์
     device: Literal["auto", "cuda", "cpu"] = "auto"
     vram_budget_mb: int = 6500
     vram_reserve_mb: int = 1200  # เหลือไว้ให้ UI/shader/วิดีโอ
-    cudnn_benchmark: bool = True
+    cudnn_benchmark: bool = False  # ปิด: ความยาวอินพุตไม่คงที่ (alignment ทีละบรรทัด) benchmark ซ้ำทุกครั้งช้ามาก
     empty_cache_after_track: bool = True
     worker_priority: Literal["below_normal", "idle", "normal"] = "below_normal"
     watchdog_timeout_s: float = 20.0
@@ -215,6 +445,26 @@ class ModelsConfig(_Model):
     whisper: WhisperCfg = WhisperCfg()
     beats: BeatsCfg = BeatsCfg()
     progressive: ProgressiveCfg = ProgressiveCfg()
+    translate: TranslateCfg = TranslateCfg()
+    analysis: AnalysisCfg = AnalysisCfg()
+
+    @model_validator(mode="before")
+    @classmethod
+    def _resolve_ai_dirs(cls, data: Any) -> Any:
+        """หาโฟลเดอร์ AI: ค่าที่ตั้ง (สัมพัทธ์ = อิงโปรเจกต์) หรือค่าเริ่มต้น <โปรเจกต์>/ai_runtime
+        ทำไมไม่ใช้ %LOCALAPPDATA%: เซสชันที่ผมติดตั้งรันในแพ็กเกจ MSIX ของ Claude ซึ่ง "เสมือน" AppData — ไฟล์ที่เขียนที่นั่นแอปปกติมองไม่เห็น"""
+        if not isinstance(data, dict):
+            return data
+        data = dict(data)
+        runtime = PROJECT_ROOT / "ai_runtime"
+        for key, sub in (("site_dir", "site"), ("model_dir", "models")):
+            val = data.get(key) or ""
+            if val:
+                path = Path(str(val))
+                data[key] = str(path if path.is_absolute() else PROJECT_ROOT / path)
+            elif (runtime / sub).is_dir():
+                data[key] = str(runtime / sub)
+        return data
 
 
 # ---------------------------------------------------------------------------

@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "_comment": "selector ของหน้า YouTube / YouTube Music ที่ส่วนขยายใช้วางปุ่ม (ข้อ 10.4) — YouTube เปลี่ยนหน้าเว็บเมื่อไหร่ แก้ที่ไฟล์นี้ที่เดียว หาไม่เจอ = ไม่แสดงปุ่ม + log ห้ามทำให้หน้าเว็บพัง ค่าจริงจะตรวจและเติมในเฟส 2",
+  "_comment": "selector ของหน้า YouTube / YouTube Music ที่ส่วนขยายใช้ (ข้อ 10.4) — ตรวจกับหน้าจริงแล้ว 2026-10-20 (หน้าวิดีโอ, ค้นหา, YouTube Music) YouTube เปลี่ยนหน้าเว็บเมื่อไหร่ แก้ที่ไฟล์นี้ที่เดียว (แล้วสำเนาไป extension/selectors.json) หาไม่เจอ = ไม่แสดงปุ่ม + log ห้ามทำให้หน้าเว็บพัง · music_section_rows: h1 = ชื่อเพลง, ข้อความถัดไป = ศิลปิน, ถัดไป = อัลบั้ม",
   "youtube": {
     "thumbnail_containers": [
       "ytd-rich-item-renderer",

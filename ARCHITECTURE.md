@@ -1,7 +1,7 @@
 # ARCHITECTURE.md — SyncLyrics
 
 > **อ่านไฟล์นี้ก่อนแก้โค้ดทุกครั้ง** · อัปเดตทุกครั้งที่แก้โครงสร้าง
-> สถานะ: เฟส 1 เสร็จ (เล่นเสียงจาก YouTube + เนื้อเพลง + ทีละคำแบบประมาณ + UI ขั้นต่ำ) — ส่วนที่ยังเป็น stub เขียนว่า "เฟส N" ใน docstring (ดู §12)
+> สถานะ: เฟส 2 โค้ดเสร็จ รอผู้ใช้ทดสอบ — **แอปไม่เล่นเสียง (ผู้ใช้สั่ง 2026-10-20): เล่นใน YouTube อย่างเดียว แอปเป็นหน้าต่างเนื้อเพลงลอยตาม UX UI.txt** (ส่วนขยาย Chrome + native host + โหมดคู่หูโหมดเดียว + หน้าต่างลอย/ตั้งค่า/tray + health check — ดู §13; §2/§3/§7 ส่วนโหมดแอป/เสียง/AutoMix เป็นโค้ดที่ปิดอยู่) · เฟส 1 = เล่นเสียงจาก YouTube + เนื้อเพลง + ทีละคำแบบประมาณ · ส่วนที่ยังเป็น stub เขียนว่า "เฟส N" ใน docstring (ดู §12)
 > ปรับล่าสุด: 2026-10-20
 
 ภาพรวม: โปรแกรมเล่นเพลงบน Windows (Python 3.12 + PySide6/QML) เล่นเสียงจาก YouTube พร้อมเนื้อเพลงทีละคำ, AutoMix ที่เรียนรู้จากดาว และ AI บน GPU ในเครื่อง คู่กับส่วนขยาย Chrome ที่เป็นแค่ตัวส่งเพลง/รีโมต
@@ -19,7 +19,8 @@
 | แหล่งเนื้อเพลงหนึ่งพัง | `app/lyrics/sources/<ชื่อ>.py` (ปิดได้ในหน้าตั้งค่า ระบบข้ามเอง) |
 | โหลดเพลงไม่ได้ / 403 / cookies | `app/media/youtube.py` → อัปเดต yt-dlp ก่อนเสมอ (สาเหตุอันดับ 1) |
 | ปุ่มบน YouTube หาย | `config/selectors.json` (ไม่ต้องแก้โค้ด) |
-| ส่วนขยายต่อไม่ติด | `app/bridge/host.py`, `app/bridge/registry.py`, `app/bridge/pipe_server.py` |
+| ส่วนขยายต่อไม่ติด | ไอคอนจุดแดง = host ไม่ได้ลงทะเบียน (`app/bridge/registry.py`, `scripts\install_extension.bat`) · เทา = แอปไม่ได้เปิด · ดู `logs/bridge-host.log`, `app/bridge/host.py`, `app/bridge/pipe_server.py`, `app/bridge/service.py` |
+| ส่งเพลงจาก YouTube เข้าแอปไม่ไป / เสียงซ้อน 2 ทาง | `extension/content.js` (`handoff`, `onVideoPlay`), `app/bridge/service.py` (`_h_play_now`) |
 | AI ค้าง / VRAM เต็ม | `app/ai/client.py` (watchdog), `config/models.yaml`, `app/ai/worker.py` |
 | มิกซ์ไม่เพราะ | `config/automix_rules.yaml` (มีผลทันที) → `app/automix/planner.py` → ปุ่ม "รายงานมิกซ์ที่ไม่เพราะ" |
 | ภาพกระตุก / FPS ตก | `app/ui/qml/*`, `app/ui/shaders/*` (ลด blur), ห้ามสร้าง node ข้อความใหม่ทุกเฟรม |
@@ -132,7 +133,11 @@ logic ทั้งหมดไม่รู้จัก Qt — ส่งเหต
 | `ai.status` / `bridge.status` / `error` | … | ai / bridge / ทุกส่วน |
 | `lyrics.offset` | video_id, offset | player (ปรับด้วย [ ] — UI เป็นคนเลื่อนเวลา: เวลาเนื้อเพลง = เวลาเสียง − offset) |
 | `player.status` | text | player ("กำลังโหลดเสียง 40%") |
-| `bridge.message` | type, payload, id, client | bridge (ข้อความดิบจากส่วนขยาย/ตัวเปิดซ้ำ) |
+| `bridge.message` | type, payload, id, client | bridge (ข้อความดิบจากส่วนขยาย/ตัวเปิดซ้ำ; type="_disconnected" เมื่อ client หลุด) |
+| `bridge.status` | connected, ext_version | BridgeService (หลัง hello / เมื่อ client สุดท้ายหลุด) |
+| `mode.changed` | mode (app/companion) | player |
+| `queue.changed` | items (dict ของ TrackRef), index | player |
+| `health.report` | items (HealthItem), text | main (run_health ใน IO thread ตอนเปิด) |
 
 QML (โครงใน `app/ui/qml/Main.qml`): NowPlaying, LyricsView/LyricLine (shader mask ทีละคำ), Background (Fluid/Blur Cover/Video/…), Transitions, RatingPopup, SettingsPage, DebugPage, DesktopLyrics
 กฎประสิทธิภาพ: อ่านนาฬิกาทุกเฟรม (ไม่ใช้ Timer), node ข้อความสร้างครั้งเดียวต่อบรรทัด, วาดเฉพาะบรรทัดใกล้จอ, FPS < 50 → ลดเอฟเฟกต์อัตโนมัติ
@@ -265,7 +270,7 @@ analysis A,B ──▶ compat.py (0-100) ──┬─ < 40 ───────
 ## 12. สถานะจริงของเฟส 1 (อัปเดตให้ตรงกับโค้ด)
 
 ทำงานจริงแล้ว: ทุกอย่างในโฟลเดอร์ `app/media`, `app/audio` (deck เดียว), `app/lyrics`, `app/player/controller.py`, `app/main.py`, `app/ui`, single instance (`bridge/pipe_server.py`)
-ยังเป็น stub: `app/ai/*` (เฟส 4), `app/automix/*` (เฟส 6-7), `bridge/host.py` + โปรโตคอลส่วนขยาย (เฟส 2), `audio/dsp.py` ยกเว้น Limiter (เฟส 5-6), queue/preload (เฟส 5), shader/ธีม/ตั้งค่า (เฟส 3)
+ยังเป็น stub: `app/ai/*` (เฟส 4), `app/automix/*` (เฟส 6-7), `audio/dsp.py` ยกเว้น Limiter (เฟส 5-6), preload/คิวเต็มรูปแบบ (เฟส 5), shader/ธีม/ตั้งค่า (เฟส 3) — bridge/ส่วนขยาย/คิวขั้นต่ำเสร็จในเฟส 2 (§13)
 
 ### เส้นทางตั้งแต่กดเล่นจนมีเสียง (วัดจริง: เสียงออก ~2.7 วิจากสถานะเย็น, เนื้อเพลง ~4 วิ)
 `PlayerController.play` → `IoThread` → `YouTubeClient.fetch_and_download` (**extract ครั้งเดียว**: `on_info` ถูกเรียกทันทีที่รู้ข้อมูล → เริ่มหาเนื้อเพลง+ปกขนานกับการโหลดเสียง) → `Decoder` (ffmpeg → `.f32` memmap) → `wait_for_frames(2 วิ)` → `engine.load(full_program(buf))` + `play`
@@ -300,3 +305,109 @@ analysis A,B ──▶ compat.py (0-100) ──┬─ < 40 ───────
 - QRC ของ QQ ทีละคำ: ถอดรหัสไม่ได้ (DES ดัดแปลง) → qqmusic ให้เฉพาะ LRC ระดับบรรทัด
 - เนื้อเพลงที่ความยาวต่างจากวิดีโอ >10 วิ: เวลาเหมือนจะเลื่อนทั้งเพลง — แสดงคำเตือนที่ป้ายแหล่ง และปรับมือด้วย `[` `]` · แก้อัตโนมัติด้วย AI ในเฟส 4 (`offset.py`)
 - ฟอนต์หลัก **SF Thonburi** (ผู้ใช้เลือก) ต้องติดตั้งในเครื่อง (ไม่ฝังกับโปรแกรม เพราะเป็นฟอนต์ของ Apple) ไม่มี = ใช้ `lyrics_look.font_fallbacks`
+
+
+---
+
+## 13. สถานะจริงของเฟส 2: แอปแสดงเนื้อเพลงตามเพลงที่เล่นใน YouTube (ไม่เล่นเสียงเอง)
+
+> ทิศทางผลิตภัณฑ์ (DECISIONS 2026-10-20): ผู้ใช้เล่นเพลงใน YouTube เท่านั้น · แอปไม่เล่นเสียง ไม่เปิดอุปกรณ์เสียง (`PlaybackSettings.app_audio=False`) · แอปเป็น "Premium Desktop Lyrics Utility" ตาม `add by win/UX UI.txt` · โค้ดโหมดแอปเดิม (engine/decoder/คิว/`controller.play`) เก็บไว้แต่ปิด — เฟส 5-7 ยังไม่ได้ตัดสินใจ (ถามผู้ใช้)
+
+### โครงสร้าง (Chrome → แอป)
+```
+extension/content.js ─┐ chrome.runtime.sendMessage        ┌ extension/background.js (service worker)
+ (ทุกแท็บ YouTube)    └──────────────────────────────────▶│  connectNative + เลือกแท็บต้นทางที่กำลังเล่น
+   ส่งแค่ video_id + เวลา                                   └─── stdio (uint32 LE + JSON) ───▶ app/bridge/host.py (HostBridge)
+   (ไม่ส่งชื่อเพลงจากหน้าเว็บ)                                                                      │ named pipe \\.\pipe\synclyrics-<user> (หรือ $SYNCLYRICS_PIPE)
+                                                       app/bridge/pipe_server.py (BridgeServer, QLocalServer, UI thread) ◀┘
+                                                                  │ EventBus "bridge.message"
+                                                       app/bridge/service.py (BridgeService, ไม่รู้จัก Qt) ──▶ PlayerController (โหมด companion)
+```
+- **host อยู่ตลอดและไม่เปิดแอปเอง**: รอ pipe ทุก 1 วิ เปิดแอปเมื่อส่วนขยายส่ง `launch_app` เท่านั้น (กดไอคอน/เมนู) · host → ส่วนขยาย: `host_connected` (→ ส่งตัว `hello`), `status{connected:false}`, `error{app_not_running}`
+- ฝั่งอ่าน pipe ใช้ `PeekNamedPipe` ก่อนอ่านเสมอ (handle แบบ synchronous ของ Windows ล็อกการเขียนระหว่างที่อ่านค้าง)
+- จุดเข้าแอปคือ `python -m app` (ไม่ใช่ `-m app.main`) · ระหว่างพัฒนา Chrome เปิด `scripts\synclyrics-host.bat` · ตัวติดตั้ง (เฟส 8) ใช้ `synclyrics-host.exe`
+- ส่วนขยาย ID คงที่ `jjafolpgjdghgjadopngdolglpllbhod` (key ใน manifest; `extension/key.pem` ห้าม commit — **สำรองไว้**)
+- ข้อความ ส่วนขยาย→แอป: `hello, companion_track{track:{video_id}}, companion_state{video_id,current_time,rate,paused,sent_at_ms,seeked,duration}, command{play_pause|next|prev|seek|open_settings|focus}, launch_app (host จัดการเอง), log` · แอป→ส่วนขยาย: `hello_ack{auto_send}, status, tab_control{play|pause|seek|next|prev}, reload_extension, error` (`play_now/enqueue*` ยังมีในโปรโตคอลแต่แอปเมินเมื่อ `app_audio=False`)
+
+### flow: เพลงเปลี่ยนใน YouTube → แอปตามทัน
+1. content.js ฟัง `<video>` (play/pause/seeked/ratechange/loadedmetadata/…) + `yt-navigate-finish` + ส่งเวลาทุก 250ms ตอนเล่น (ตรวจการกรอจากเวลากระโดด >0.7 วิด้วย) · ไม่หยุด/ไม่แตะวิดีโอ
+2. background.js เลือกแท็บต้นทาง: ยึดแท็บที่กำลังเล่น (แท็บอื่นที่หยุดอยู่ไม่แย่ง · แท็บอื่นเริ่มเล่น = ย้าย · เงียบเกิน 3 วิ = รับช่วงได้) · ปิดแท็บต้นทาง = ส่ง `paused:true`
+3. แอป `controller.companion_state`: videoId ไม่ตรงเพลงปัจจุบัน → **จับเพลงใหม่เอง** (ไม่ต้องพึ่ง companion_track) → `companion_track` → เคลียร์หน้าจอทันที (TRACK_CHANGED ชื่อว่าง) → `_resolve_companion_track`: oEmbed (~0.2 วิ) + yt-dlp `fetch_info` (รอไม่เกิน `INFO_WAIT_S`=3 วิ) → `_side_tasks` (เนื้อเพลง → ปก) · **ชื่อ/ช่อง/Music section จากหน้าเว็บเป็นแค่คำใบ้** ใช้ Music section ก็ต่อเมื่อชื่อบนหน้าตรงกับชื่อที่ยืนยันแล้ว (`_same_title`)
+4. เวลาเนื้อเพลง = `RemoteClock` (ชดเชย latency จาก `sent_at_ms`, สไลด์ค่อยๆ ไล่ถ้าคลาด <0.25 วิ, snap ถ้ากรอ) · ปุ่ม/คีย์ลัดในแอป → `controller._tab()` → `tab_control` → แท็บต้นทาง
+5. ล้างแคชเนื้อเพลง/ชื่อที่บันทึกผิดจากบั๊กเก่าครั้งเดียวตอนเปิด (`db.purge_stale_companion_cache`, kv `purge_stale_companion_meta_v1`)
+
+### UI (add by win/UX UI.txt) — `app/ui/qml/`
+| ไฟล์ | หน้าที่ |
+| --- | --- |
+| `Main.qml` | รากเป็น `QtObject` (ไม่มีหน้าต่างหลัก): สร้าง `Overlay` + `SettingsWindow` + `Tray` · `showOverlay()/showSettings()` ให้ Python เรียก |
+| `Overlay.qml` | หน้าต่างเนื้อเพลงลอย frameless/โปร่งใส/`Qt.Tool` (ไม่ขึ้น Taskbar)/always-on-top · 2 โหมดลอย: minimal(บรรทัดเดียว พื้นหลังโปร่งมาก ไม่มีเงา/ขอบ)/focus(3 บรรทัด ค่าเริ่มต้น) ขนาดจำแยกตามโหมด จำนวนบรรทัด→ความสูง · พื้นหลัง โปร่งใส/กระจกฝ้า(เบลอฉากหลังจริง acrylic)/ดำนุ่ม/ทึบ/gradient/กำหนดเอง + ความโปร่งใสทั้งหน้าต่าง · แถบควบคุมโผล่ตอนชี้เมาส์พร้อม tooltip (ย้าย/ล็อก/โหมด/เต็มจอ/แปล/ตัวอื่น/ตั้งค่า/ซ่อน) · ปรับขนาดที่ขอบ · click-through (บอกวิธีปิด) · จำตำแหน่ง/ขนาด · กันหลุดจอ · ตำแหน่งสำเร็จรูป + center_h + ตำแหน่งเริ่มต้น + เลือกจอ · snap ขอบจอ 18px |
+| `FullWindow.qml` | **หน้าต่างโหมดเต็มแบบ Apple Music**: หน้าต่างปกติ (แถบชื่อ ย่อ/ขยาย/ปิดได้) + เต็มจอ (F/F11, Esc ออก) จำขนาด/ตำแหน่ง · พื้นหลังไหลลื่นสีจากปก (`shaders/fluid.frag`, สีมาจาก `player.palette` ← `artwork.dominant_colors`) · ปกซ้าย (`FullPanel`) เนื้อเพลงใหญ่ชิดซ้าย ขนาดตามความสูงหน้าต่าง × `fw_font_scale` · แถบควบคุม+เมาส์ซ่อนเองตอนเต็มจอ · เปิดแล้วหน้าต่างลอยซ่อน · หน้าต่างแคบ (<760px) = หัวเรื่องย่อ + เนื้อเพลงเต็มกว้าง · คีย์ลัด Space ←→ N P [ ] + − T |
+| `LyricsView.qml` / `LyricLine.qml` | เลื่อนสปริง/ไฮไลต์ทีละคำ 4 แบบ (fill/word/glow/line)/แอนิเมชัน 4 แบบ/ลดการเคลื่อนไหว/คำแปลใต้บรรทัด/สถานะว่าง (รอเชื่อมต่อ·การเชื่อมต่อหลุด·กำลังค้นหา·ไม่พบ·ไม่รองรับ(ถ่ายทอดสด)) · **แอนิเมชันปรับแต่งได้ละเอียด** (ชุดสำเร็จรูป 5 ใน `anim_presets.py` + ความเร็ว/ความแรง/สปริง stiffness-damping/คลื่นหน่วงต่อบรรทัด/เบลอตามระยะ (MultiEffect เฉพาะ 6 บรรทัดใกล้)/ความจาง/ขนาดบรรทัดอื่น/การลอยของคำ/น้ำหนักบรรทัดปัจจุบัน) · ป้ายแหล่ง + "เวลาทีละคำเป็นการประมาณ" เมื่อเวลาแค่ระดับบรรทัด (spec 4.4) · รับสี/ขนาด/การจัดวาง/pastFilled ทับจากภายนอกได้ (FullWindow ใช้ซ้ำ) |
+| `FullPanel.qml` | แผงเพลงฝั่งซ้ายของโหมดเต็ม: ปกมุมโค้ง **ครอปเต็มช่องใน shader** (`rounded_image.frag` รับ `imgSize` — ShaderEffect ใช้ texture ทั้งรูปเสมอ ไม่สน fillMode ถ้าไม่ครอปเองรูป 16:9 จะถูกบีบ), ชื่อ/ศิลปินชิดซ้าย, แถบเวลา (คลิก=สั่งกรอที่ YouTube), ◀◀ ❚❚ ▶▶ (สั่งแท็บ) |
+| `SettingsWindow.qml` | ตั้งค่า 5 หมวด: รูปลักษณ์/เนื้อเพลง/หน้าต่าง/การซิงก์/ทั่วไป (คีย์ลัด, เปิดพร้อม Windows, รีเซ็ต) — เห็นผลทันที · ปิดหน้าต่าง = ซ่อน |
+| `Tray.qml` | ไอคอนถาดระบบ: แสดง/ซ่อน, ตั้งค่า, คลิกทะลุ, ล็อก, เชื่อมต่อ YouTube, ออก |
+- ค่าตั้งทั้งหมดอยู่ใน `cfg` (`QQmlPropertyMap`, คีย์ `ov_*` overlay, `look_*` ฟอนต์/เนื้อเพลง, `hk_*` คีย์ลัด, `st_*` เริ่มต้น) ← `app/ui/settings_bridge.py` + `settings_store.py` (ตรรกะล้วน ตรวจค่า/ธีมเปลี่ยนตาม/รีเซ็ต) + `themes.py` (ธีมสำเร็จรูป 5) · QML เขียน `cfg.ov_mode = "full"` ได้ตรงๆ → ตรวจ → เซฟ `settings.yaml` แบบ debounce 0.5 วิ
+- **ปุ่ม ↺ รายตัว:** `Row2` ใน `SettingsWindow.qml` หา `key` จากตัวควบคุมตัวแรกในแถว (หรือ `resetKey:` ระบุเอง) แล้วถาม `settingsBridge.isDefault(key, cfg[key])` → `SettingsStore.is_default` · กด = `resetKey` → `SettingsStore.reset_key` (ผ่าน `set()` ผลข้างเคียงของธีม/ชุดแอนิเมชันทำงานเหมือนผู้ใช้ปรับเอง) · **ชุดการตั้งค่าตั้งชื่อ:** `app/ui/settings_presets.py` (`PresetStore` ไฟล์ `<data>/settings_presets.json` เขียนแบบ atomic ไฟล์พัง→.bad) + `SettingsStore.snapshot/apply_snapshot` (เฉพาะหมวด full/float/font/theme/lyrics/anim ยกเว้น ov_visible/ov_monitor/fw_maximized) · bridge: `savePreset/loadPreset/deletePreset/presetNames`
+- คีย์ลัดทั้งระบบ `app/ui/hotkeys.py` (RegisterHotKey, เธรดเดียว, รายงานคีย์ซ้ำ) · เปิดพร้อม Windows `app/ui/startup.py` (HKCU Run)
+- Qt 6 `quit()` ให้หน้าต่างปฏิเสธการปิดได้ → หน้าตั้งค่าที่ซ่อนลงถาดต้องยอมปิดเมื่อ `settingsBridge.quitting` (เคยทำให้ "ออกจากโปรแกรม" ค้าง)
+- เบลอฉากหลังจริง (`app/ui/winfx.py`, ctypes): `SetWindowCompositionAttribute` acrylic + `DWMWA_WINDOW_CORNER_PREFERENCE` มุมโค้ง 8px (Windows 11; Windows 10 ถอยไปใช้ `SetWindowRgn`) — เฉพาะสไตล์ "กระจกฝ้า" + `ov_blur_behind` · `SetWindowRgn` อย่างเดียวบน Windows 11 ไม่ตัดส่วนที่เบลอ (มีมุมเหลี่ยมโผล่) จึงใช้ DWM
+- ปก: `artwork.autocrop_black_bars` ตัดขอบดำ + **`find_art_square`** ตัดปกจัตุรัสออกจาก thumbnail แบบ Topic (ปกกลางพื้นหลังเบลอ 16:9: ตรวจจากรายละเอียดคอลัมน์ + ต้องกึ่งกลางและกว้างเท่าความสูง) · `dominant_colors` สีเด่น 4 สีของปก (Pillow median-cut; ปกขาวดำคงโทนเทา) → `TRACK_META_READY.palette` → `player.palette`
+- ยังไม่ทำ (P2 ที่เหลือ): ตำแหน่งแยกต่อจอ, ธีม export/import, เนื้อเพลงไม่มีเวลา (โหมดไม่ซิงก์), ภาษา UI อังกฤษ, edge glow, ตัวเลือกคำแปลหลายภาษา
+
+### ตัวช่วยติดตั้ง / health check
+`app/bridge/installer.py`: คัดลอก `extension/` (ไม่รวม key.pem/README) → `%LOCALAPPDATA%\SyncLyrics\extension` + ลงทะเบียน host (HKCU) + path ใส่ clipboard + เปิด chrome://extensions (ปุ่ม "ติดตั้งส่วนขยาย" ใน UI/tray หรือ `scripts\install_extension.bat`) · `app/core/health.py`: ตรวจ Node.js/cookies/ส่วนขยาย (ffmpeg/อุปกรณ์เสียงเฉพาะเมื่อ `app_audio`) ไม่ใช้เครือข่าย
+
+### ข้อควรรู้
+- เสียงที่ yt-dlp ดึงได้ opus ~137k เท่ากันทั้งมีและไม่มี cookies — cookies มีประโยชน์กับวิดีโอจำกัดอายุเท่านั้น
+- `youtube_subs`: ชื่อวิดีโอเป็นไทย/ญี่ปุ่น/เกาหลี แต่คำบรรยายไม่ตรงภาษา = ถือเป็นคำแปล ไม่ส่งเป็นผล
+- ปก: iTunes (ต้นฉบับ) / thumbnail ของคลิป (รีมิกซ์/ไม่เจอ) + ตัดขอบดำของ thumbnail (`artwork.autocrop_black_bars`, Pillow)
+- **ยังไม่แก้ (เฟส 4):** เวลาเนื้อเพลงของ MV/คลิปที่ไม่ใช่ official audio ไม่ตรงเสียงจริง — ต้องฟังเสียงจัดเวลา (ดู PROGRESS)
+- test: `test_bridge.py`, `test_phase2.py`, `test_settings_store.py`, `test_hotkeys_startup.py`, `test_ui_smoke.py` (QML ทุกโหมด/ธีม), `test_extension_js.py` + `tests/js/background.test.js` · **end-to-end กับ Chrome ตัวจริง** (headless + `Extensions.loadUnpacked` ผ่าน `--remote-debugging-pipe` + host จริง + แอปจริง `SYNCLYRICS_PIPE=synclyrics-e2e`) — สคริปต์อยู่ใน scratchpad ของเซสชัน ยังไม่ได้ commit
+
+
+---
+
+## 14. เฟส 4: AI ฟังเสียงจัดเวลาเนื้อเพลง + แปลไทย (ใช้งานได้จริง — ผลวัดดู docs/handoff/PHASE-4.md)
+
+> แอปไม่เล่นเสียง → AI โหลดเสียงของคลิปมาวิเคราะห์เบื้องหลังเอง (yt-dlp → ไฟล์ชั่วคราว `cache/analysis/<id>/` ลบหลังเสร็จ) · ทุกอย่างล้มเหลวได้เงียบๆ หน้าจอยังมีเวลาจากแหล่ง/ประมาณ (ข้อ 11.2)
+
+### ภาพรวม
+```
+เนื้อเพลงสุดท้ายพร้อม (controller._emit_lyrics → _align_hook)
+  ├─ LyricsAligner.start (process หลัก, asyncio) ── DB ai_results(kind='align', lyrics_key=hash ข้อความ) มีผล? → ใช้ทันที
+  │     └ ไม่มี: รอ AiClient.available → (transcript ใน cache/stems/<id>/ ใช้ได้? ไม่ต้องโหลดเสียง) หรือ fetch_and_download → submit_align
+  ├─ AiClient (thread ฟัง + watchdog) ── multiprocessing Queue ──▶ AI worker (spawn, BELOW_NORMAL, ต่อ site_dir เข้า sys.path)
+  │     worker.job_align_song: ffmpeg decode 44.1k → ทีละช่วง 30 วิ (+บริบท 3 วิ) เริ่มจากช่วงที่กำลังฟัง:
+  │        Demucs htdemucs (autocast fp16) → เสียงร้อง → 16k mono → faster-whisper large-v3-turbo (คำ+เวลา)
+  │        → pipeline/match.py จับคู่ตัวอักษรเนื้อเพลง↔transcript (SequenceMatcher) → เวลาจริงทุกบรรทัด
+  │        → pipeline/align.py (MMS_FA + uroman) เกลาเวลาคำของบรรทัดที่จับคู่ได้ (conf < 0.45 = ไม่เชื่อ)
+  │        → ส่ง result kind=align_partial ทุกช่วง · align_final ตอนจบ (+ช่วงเสียงร้อง, coverage, version_mismatch)
+  │        เก็บ cache: transcript.json (คำ+เวลา+ช่วงเสียงร้อง) + vocals16k.npy — สลับเนื้อเพลง/เปิดซ้ำไม่ต้องใช้ GPU
+  └─ handler (thread ของ AiClient) → apply_result → EventBus LYRICS_RETIMED {lyrics, source_label, final, coverage, gaps}
+        → UI: LyricsModel.retime (แก้ในที่ ไม่รีเซ็ตการเลื่อน/คำแปล) + ช่วงดนตรีจากเสียงร้องจริง (gapAfter/gapStart + edgeGaps อินโทร/เอาท์โทร)
+ไม่มีเนื้อเพลงเลย → งานเดียวกันแต่ lines=[] → worker ถอดเสียงเป็นบรรทัด (group_words_into_lines) → Lyrics(ai_transcribed=True) ป้าย "ถอดเสียงโดย AI"
+เนื้อเพลงจับคู่กับเสียงได้ < min_coverage (0.25) → version_mismatch: ไม่แตะเวลาเดิม · ป้ายบอก · controller.on_align_mismatch ลองเนื้อเพลงตัวถัดไป (≤3 ครั้ง/เพลง)
+**โครงสร้างต่างจากเนื้อเพลง (รีมิกซ์ ฯลฯ)**: จับคู่แบบเรียงลำดับได้ < 50% และ transcript น่าเชื่อถือ (`transcript_reliable`) → ลอง `reconstruct_by_transcript`: สร้างบรรทัดตาม "ลำดับที่ร้องจริง" จาก transcript แล้วแทนข้อความด้วยบรรทัดเนื้อเพลงที่คล้ายพอ (≥0.62) · ใช้เมื่อได้ข้อความตรงเนื้อเพลงเพิ่ม ≥ 8 จุด% (`reconstruct_gain`) หรือเนื้อเพลงแทบไม่ตรงเลย (< `min_coverage`) → mode `reconstruct` → `lyrics_from_reconstruct` (ป้าย "จัดตามเสียงจริง", `restructured=True` → controller.on_lyrics_retimed ส่งแปลชุดใหม่)
+ข้อควรระวัง: เสียงร้องไทยของ Whisper ได้เป็นชิ้นย่อย → `regroup_tokens` + pythainlp รวมเป็นคำจริงก่อนแสดง · Whisper มั่ว "yeah yeah…" วนซ้ำตอนดนตรีล้วน → `clean_transcript` ตัดก่อนจับคู่ · บรรทัดที่เลื่อนผิดแปลกจากเพื่อนบ้านที่ตรงกันเอง ถูกตัดทิ้ง (`_reject_outliers`) · cudnn.benchmark ต้องปิด (ความยาวอินพุตไม่คงที่ ช้าลง 10 เท่า)
+แปลไทย: LyricsTranslator → worker job translate (**NLLB-200 distilled 1.3B แบบ CTranslate2 int8** 1.4 GB ผ่าน ctranslate2+sentencepiece ไม่ใช้ transformers · ซ้ำ=แปลครั้งเดียว) → TRANSLATION_READY → LyricsModel.set_translations · คุณภาพ: อ่านรู้เรื่องแต่ยังไม่ "สวย" (เช่น Milky Way → "ทางดวงนม") — ทางอัปเกรด = LLM ในเครื่อง (ต้องพื้นที่ดิสก์ ≥ 5 GB และ VRAM แบ่งกับ Whisper)
+```
+
+### ไฟล์
+| ไฟล์ | หน้าที่ |
+| --- | --- |
+| `app/ai/client.py` | `AiClient`: spawn/ฟัง/watchdog (heartbeat), `submit_align/submit_translate`, `cancel_video` (ตาม job_id), restart + ส่งงานซ้ำ ≤2 ครั้ง · `ai_libs_present` ตรวจ torch/whisper/demucs โดยไม่ import |
+| `app/ai/worker.py` | `Worker`: โหลดโมเดลค้าง (demucs/whisper/MMS), `job_align_song`, ยกเลิกระหว่างช่วง, heartbeat, degraded |
+| `app/ai/aligner.py` | `LyricsAligner` + ฟังก์ชันล้วน `lyrics_key / lyrics_to_input / apply_result / lyrics_from_transcript / gaps_from_vocals` |
+| `app/ai/translator.py`, `translate_job.py` | แปลไทย (ฝั่งหลัก / ฝั่ง worker, NLLB ct2 int8) · `plan()` กำจัดบรรทัดซ้ำ |
+| `app/ai/cache.py` | ไฟล์ cache ต่อเพลง (กุญแจ = algo_version+โมเดล) + จำกัดจำนวนเพลง |
+| `app/ai/env.py` | ต่อ `models.yaml: site_dir` (ต่อท้าย sys.path) + `model_dir` (HF_HOME/TORCH_HOME) |
+| `app/ai/gpu.py` | `query_gpu()` ด้วย pynvml |
+| `app/ai/pipeline/match.py` | **หัวใจ**: จับคู่เนื้อเพลง↔transcript ระดับตัวอักษร (ไม่พึ่ง torch ทดสอบได้) · บรรทัดที่ไม่จับคู่ = ยืด/เลื่อนเวลาเดิมตามจุดยึด |
+| `app/ai/pipeline/{stems,transcribe,align,audio,vocal_activity}.py` | Demucs · faster-whisper · MMS_FA · ffmpeg decode · ช่วงเสียงร้อง/ช่วงดนตรี |
+| `scripts/ai_eval.py <videoId>` | ทดสอบ pipeline กับคลิปจริงโดยไม่เปิดโปรแกรม (พิมพ์ coverage/offset/ตารางเวลา + "ความตรงกับเสียงร้องจริง" = สัดส่วนเวลาบรรทัดที่อยู่ในช่วงมีเสียงร้อง) |
+| `scripts/ai_e2e.py <videoId> [--translate]` | ทดสอบครบวงจร: AiClient (worker process จริง) + LyricsAligner + translator + EventBus |
+
+### การตั้งค่า/ที่เก็บ
+- `models.yaml`: `site_dir` (เครื่องนี้ `%LOCALAPPDATA%/SyncLyrics/ai/site` — D: เป็น USB ช้า ใช้ไม่ได้ ดู DECISIONS) · `model_dir` · `analysis.{window_s,context_s,min_coverage,algo_version}` · `translate.*` · `whisper.keep_loaded=true`
+- DB: ตาราง `ai_results(video_id, kind, lyrics_key, version, payload)` (migration ท้ายสุด) · ผลผูกกับ "ข้อความเนื้อเพลง" ไม่ใช่เวลา → เนื้อเพลงเดิมจากแหล่งเดิมใช้ผลซ้ำได้
+- เปลี่ยนวิธีจัดเวลา → เพิ่ม `analysis.algo_version` (ผลเก่าหมดอายุเอง)

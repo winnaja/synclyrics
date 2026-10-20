@@ -1,0 +1,59 @@
+{
+  "manifest_version": 3,
+  "name": "SyncLyrics",
+  "version": "0.3.1",
+  "description": "แสดงเนื้อเพลงของเพลงที่เล่นใน YouTube บนหน้าต่างลอย (ส่งแค่ videoId และเวลาเล่นให้โปรแกรม SyncLyrics)",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEArt77IQ0OjF92OEl1D6f1T0YctJV8UJTUgqMCbDOMHqqkV2Er6bIgJOZ3W9e7pASfJzmmUMQXCaTieylFHelko4APzbiO1SnEjh2TruOvlSZnty24MLo8O46jZkBYp9mjYyhm/MDlHnY6/ntHA7HMkQxIKp1ilaTERb4fm7cCAoGwJpteBBuIFwnbxaWb61kPbaCtcn/SgeuWCaL+QafWpuv/bSzLy1iJ6efqR0jaGS2pbIKh0UDL+K9jScF44zee75/aVHVbbPGBFSHVWS7FtEVN9AG/Ew4lnO3gye176KgM1cdZBP++sk50w3kgNd3VwTNSyhDcL7bn7jBxRlygBQIDAQAB",
+  "minimum_chrome_version": "111",
+  "permissions": [
+    "nativeMessaging",
+    "contextMenus",
+    "storage",
+    "alarms"
+  ],
+  "host_permissions": [
+    "https://www.youtube.com/*",
+    "https://music.youtube.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "SyncLyrics",
+    "default_icon": {
+      "16": "icons/off-16.png",
+      "32": "icons/off-32.png",
+      "48": "icons/off-48.png",
+      "128": "icons/off-128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/on-16.png",
+    "32": "icons/on-32.png",
+    "48": "icons/on-48.png",
+    "128": "icons/on-128.png"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.youtube.com/*",
+        "https://music.youtube.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://www.youtube.com/*",
+        "https://music.youtube.com/*"
+      ],
+      "js": [
+        "page.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    }
+  ]
+}

@@ -1,4 +1,4 @@
-"""ตรวจว่าโปรแกรมดึง cookies YouTube Premium ได้ไหม และได้เสียงคุณภาพเท่าไร
+"""ตรวจว่าโปรแกรมดึง cookies YouTube ได้ไหม และได้เสียงคุณภาพเท่าไร
 
 ผลที่แสดง: โหมด cookies (chrome / file / none) และ format เสียงที่ได้ — ไม่แสดงค่า cookie ใดๆ
 วิธีใช้: scripts\\check_cookies.bat  (แนะนำปิด Chrome ก่อน เพราะ Chrome ล็อกไฟล์ cookies ไว้)
@@ -25,13 +25,13 @@ def main() -> int:
     print(msg)
     try:
         info = client.fetch_info(video_id)
-        print(f"เสียงที่ได้: {info.audio_format}  (Premium มักได้ opus สูงกว่า ~130k หรือ m4a 256k)")
+        print(f"เสียงที่ได้: {info.audio_format}  (ตรวจแล้ว YouTube ให้ดึงเสียงได้สูงสุด opus ~137k ทั้งมีและไม่มี cookies — 256k ของ Premium มีเฉพาะในแอป YouTube Music)")
         print(f"โหมดที่ใช้จริงตอนดึงข้อมูล: {client.cookie_mode}")
     except Exception as e:  # noqa: BLE001
         print("ดึงข้อมูลวิดีโอไม่สำเร็จ:", e)
         return 1
     if client.cookie_mode == "none":
-        print(f"\nถ้าต้องการ Premium: export cookies.txt (ส่วนขยาย 'Get cookies.txt LOCALLY') วางที่ {paths.cookies_file}")
+        print(f"\nถ้าต้องการให้เล่นวิดีโอจำกัดอายุ/ต้องล็อกอินได้: export cookies.txt (ส่วนขยาย 'Get cookies.txt LOCALLY') วางที่ {paths.cookies_file}")
     return 0
 
 

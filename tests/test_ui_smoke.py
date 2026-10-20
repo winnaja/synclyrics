@@ -146,6 +146,31 @@ def _scenario() -> int:
     pump(0.1)
     assert refs.model.rowCount() == 6
 
+    # AI จัดเวลาใหม่จากเสียง (เลื่อนทั้งเพลง 10 วิ) + คำแปลไทย: แก้ model แทนที่ ไม่รีเซ็ต
+    from app.core.events import LYRICS_RETIMED, TRANSLATION_READY
+
+    shifted = _lyrics()
+    for ln in shifted.lines:
+        ln.start += 10.0
+        ln.end += 10.0
+        for w in ln.words:
+            w.start += 10.0
+            w.end += 10.0
+    shifted.duration = 60.0
+    bus.publish(LYRICS_RETIMED, {"video_id": "abc", "lyrics": shifted, "source_label": "จาก LRCLIB · จัดเวลาจากเสียงแล้ว",
+                                 "final": True, "gaps": [[0.0, 10.0], [21.5, 40.0]]})
+    pump(0.2)
+    assert list(p.property("edgeGaps")) == [0.0, 10.0, 21.5, 40.0]
+    role = {bytes(v).decode(): k for k, v in refs.model.roleNames().items()}
+    assert refs.model.data(refs.model.index(0, 0), role["start"]) == 10.0 and refs.model.rowCount() == 6
+    assert p.property("sourceLabel").endswith("จัดเวลาจากเสียงแล้ว")
+    bus.publish(TRANSLATION_READY, {"video_id": "abc", "translations": [f"แปล{i}" for i in range(6)], "lang": "th"})
+    pump(0.2)
+    assert refs.model.data(refs.model.index(2, 0), role["translation"]) == "แปล2"
+    bus.publish(LYRICS_RETIMED, {"video_id": "other", "lyrics": _lyrics(), "source_label": "x", "final": True})   # เพลงอื่นถูกทิ้ง
+    pump(0.1)
+    assert refs.model.data(refs.model.index(0, 0), role["start"]) == 10.0
+
     # ส่งจาก thread อื่น ต้องมาถึงใน UI thread
     t = threading.Thread(target=lambda: bus.publish(ERROR, {"user_message": "ข้อผิดพลาดสมมติ"}))
     t.start()
@@ -172,9 +197,162 @@ def _scenario() -> int:
     assert refs.model.rowCount() == 0
     assert _bad(messages) == [], _bad(messages)
 
-    for obj in engine.rootObjects():
-        obj.close()
-    pump(0.05)
+    # ---------- หน้าต่างเนื้อเพลงลอย + โหมดเต็ม + ตั้งค่า (UX UI) ----------
+    root = engine.rootObjects()[0]
+    overlay, settings_win, full_win = root.property("overlay"), root.property("settingsWin"), root.property("fullWin")
+    sb = refs.settings_bridge
+    assert overlay.property("objectName") == "overlay" and overlay.property("mode") == "focus"
+    assert overlay.property("width") == sb.store.settings.overlay.w_focus
+    # ตั้งค่าจากฝั่ง Python/QML: ผ่านการตรวจ -> เข้า cfg และหน้าต่างตามทันที (ไม่ต้องเปิดใหม่)
+    sb.set_from_python("ov_mode", "minimal")
+    pump(0.2)
+    assert sb.cfg.value("ov_mode") == "minimal" and overlay.property("mode") == "minimal"
+    assert overlay.property("height") == sb.store.settings.overlay.h_minimal
+    sb.set_from_python("ov_mode", "focus")
+    pump(0.1)
+    # จำนวนบรรทัดของโหมดโฟกัส -> ความสูงหน้าต่างเปลี่ยนตาม (เคยมีตัวตั้งค่าแต่ไม่ต่อสาย)
+    h3 = overlay.property("height")
+    sb.set_from_python("ov_visible_lines", 6)
+    pump(0.2)
+    assert overlay.property("height") > h3
+    sb.set_from_python("ov_visible_lines", 3)
+    # เลือกธีม -> สีเปลี่ยนตาม · ค่าผิดถูกปฏิเสธและ cfg คงค่าเดิม
+    sb.set_from_python("ov_theme", "light")
+    assert sb.cfg.value("ov_text_color") == "#1C1C1E"
+    sb.set_from_python("ov_font_size", 9999)
+    assert sb.cfg.value("ov_font_size") == 34
+    sb.set_from_python("ov_theme", "soft_dark")
+    # ซ่อน/แสดงด้วย cfg · หน้าตั้งค่าเปิดได้
+    sb.set_from_python("ov_visible", False)
+    pump(0.1)
+    assert overlay.property("visible") is False
+    sb.set_from_python("ov_visible", True)
+    from PySide6.QtCore import QMetaObject
+    QMetaObject.invokeMethod(root, "showSettings")
+    pump(0.3)
+    assert settings_win.property("visible") is True
+    p.resetOffset()
+    p.refreshLyrics()
+    p.searchLyrics("NewJeans - OMG")
+    p.reconnectYouTube()
+    assert [c[0] for c in controller.calls[-3:]] == ["reset_offset", "refresh_lyrics", "search_lyrics"]
+    assert controller.calls[-1][1] == ("NewJeans - OMG",)
+
+    # ---------- หน้าต่างโหมดเต็ม (แบบ Apple Music) ----------
+    assert full_win.property("objectName") == "fullWindow"
+    assert full_win.property("visible") is True   # โหมดเต็มเป็นหน้าแรกตอนเปิดโปรแกรม (cfg.fw_start_full)
+    sb.set_from_python("fw_open", False)
+    pump(0.3)
+    assert full_win.property("visible") is False
+    palette = list(p.property("palette"))
+    assert len(palette) == 4 and all(c.startswith("#") for c in palette)
+    bus.publish(TRACK_META_READY, {"video_id": "def", "meta": None, "cover_path": None,  # เพลงปัจจุบันของฉากนี้
+                                   "palette": ["#112233", "#445566", "#778899", "#AABBCC"]})
+    pump(0.1)
+    assert list(p.property("palette")) == ["#112233", "#445566", "#778899", "#AABBCC"]
+    sb.set_from_python("fw_open", True)
+    pump(0.4)
+    assert full_win.property("visible") is True and overlay.property("visible") is False  # เปิดโหมดเต็ม = ซ่อนหน้าต่างลอย
+    sb.set_from_python("fw_fullscreen", True)
+    pump(0.4)
+    assert full_win.property("fs") is True
+    sb.set_from_python("fw_fullscreen", False)
+    pump(0.4)
+    assert full_win.property("fs") is False
+    for bg in ("solid", "fluid"):
+        sb.set_from_python("fw_background", bg)
+        pump(0.1)
+    sb.set_from_python("fw_font_scale", 1.5)
+    pump(0.1)
+    full_win.close()  # ปุ่มปิดของหน้าต่าง = ซ่อน (ไม่ปิดโปรแกรม) และหน้าต่างลอยกลับมา
+    pump(0.3)
+    assert sb.cfg.value("fw_open") is False and full_win.property("visible") is False
+    assert overlay.property("visible") is True
+    sb.set_from_python("fw_open", False)
+
+    # ---------- ปรับแต่งแอนิเมชัน: ชุดสำเร็จรูป + ค่าละเอียดทุกตัวไม่ทำให้ QML มีคำเตือน ----------
+    sb.set_from_python("ov_anim_preset", "bouncy")
+    assert sb.cfg.value("ov_wave_ms") == 60 and sb.cfg.value("look_spring_stiffness") == 260.0
+    sb.set_from_python("ov_blur", 0.6)
+    assert sb.cfg.value("ov_anim_preset") == "custom"
+    for preset in ("smooth", "balanced", "bouncy", "snappy", "none"):
+        sb.set_from_python("ov_anim_preset", preset)
+        pump(0.08)
+    for k, v in (("ov_anim_speed", 2.5), ("ov_wave_ms", 120), ("ov_blur", 1.0), ("ov_falloff", 0.28), ("ov_idle_scale", 0.65),
+                 ("ov_lift_px", 7), ("ov_weight_boost", 200), ("ov_window_opacity", 0.8)):
+        sb.set_from_python(k, v)
+        pump(0.05)
+    # โหมดทุกแบบ/ทุกธีมไม่ทำให้ QML มีคำเตือน
+    for mode in ("minimal", "focus"):
+        for theme in ("pure_black", "frosted", "minimal_transparent", "light", "soft_dark"):
+            sb.set_from_python("ov_mode", mode)
+            sb.set_from_python("ov_theme", theme)
+            pump(0.05)
+    for wa in ("none", "word", "char"):
+        for ease in ("smooth", "gentle", "spring", "linear"):
+            sb.set_from_python("ov_word_anim", wa)
+            sb.set_from_python("ov_word_ease", ease)
+            pump(0.03)
+    for k, v in (("ov_emph_min_s", 0.4), ("ov_emph_glow", 1.0), ("fw_edge_fade", 0.3), ("fw_edge_fade", 0.0), ("fw_edge_fade", 0.14)):
+        sb.set_from_python(k, v)
+        pump(0.05)
+    sb.set_from_python("fw_lyrics_visible", False)   # โหมดดูแต่ปก
+    sb.set_from_python("fw_open", True)
+    pump(0.4)
+    sb.set_from_python("fw_lyrics_visible", True)
+    sb.set_from_python("fw_idle_hide_s", 1.0)
+    pump(0.2)
+    sb.set_from_python("fw_open", False)
+    for hl in ("fill", "word", "glow", "line"):
+        for anim in ("fade_move", "fade", "move", "scale"):
+            sb.set_from_python("ov_highlight", hl)
+            sb.set_from_python("ov_animation", anim)
+            pump(0.03)
+    sb.set_from_python("ov_reduced_motion", True)
+    pump(0.1)
+
+    # ---------- ปุ่ม ↺ รายตัว + ชุดการตั้งค่าที่ตั้งชื่อไว้ ----------
+    sb.resetAll()
+    pump(0.1)
+    assert sb.isDefault("ov_anim_speed", sb.cfg.value("ov_anim_speed")) is True
+    sb.set_from_python("ov_anim_speed", 2.0)
+    pump(0.1)
+    assert sb.isDefault("ov_anim_speed", sb.cfg.value("ov_anim_speed")) is False
+    from PySide6.QtCore import QObject
+    settings_win.setProperty("page", 6)       # หมวดแอนิเมชัน + โหมดละเอียด (ความเร็วเป็นตัวเลือกขั้นสูง)
+    settings_win.setProperty("advanced", True)
+    pump(0.3)
+    all_buttons = settings_win.findChildren(QObject, "resetKeyButton")
+    buttons = [b for b in all_buttons if b.property("visible")]
+    assert buttons, f"ปุ่ม ↺ ต้องโผล่ข้างตัวเลือกที่ปรับแล้ว (พบปุ่มทั้งหมด {len(all_buttons)})"
+    assert len(buttons) <= 3, "หลังรีเซ็ตทั้งหมดมีแค่ตัวที่ปรับไว้ที่ควรมีปุ่ม"
+    sb.resetKey("ov_anim_speed")
+    pump(0.1)
+    assert sb.cfg.value("ov_anim_speed") == 1.0
+    assert sb.savePreset("   ") != ""                     # ชื่อว่างไม่ได้
+    sb.set_from_python("ov_font_size", 55)
+    sb.set_from_python("fw_font_scale", 1.4)
+    assert sb.savePreset("ชุดทดสอบ") == ""
+    assert list(sb.property("presetNames")) == ["ชุดทดสอบ"]
+    sb.resetAll()
+    assert sb.cfg.value("ov_font_size") != 55
+    assert sb.loadPreset("ชุดทดสอบ") is True
+    pump(0.1)
+    assert sb.cfg.value("ov_font_size") == 55 and sb.cfg.value("fw_font_scale") == 1.4
+    assert sb.loadPreset("ไม่มีชุดนี้") is False
+    sb.deletePreset("ชุดทดสอบ")
+    assert list(sb.property("presetNames")) == []
+    pump(0.1)
+    assert _bad(messages) == [], _bad(messages)
+
+    # ปิดโปรแกรมต้องไม่ถูกหน้าตั้งค่าขวาง (เคยค้าง: หน้าต่างที่ซ่อนลงถาดปฏิเสธการปิด)
+    assert sb.property("quitting") is False
+    sb.quit()
+    assert sb.property("quitting") is True
+    for w in (settings_win, overlay, full_win):
+        w.close()
+    pump(0.1)
+    assert settings_win.property("visible") is False
     refs.adapter.close()
     return 0
 

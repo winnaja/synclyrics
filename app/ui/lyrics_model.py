@@ -28,34 +28,154 @@ def word_to_dict(w: Word) -> dict[str, Any]:
         "end": float(w.end),
         "estimated": w.timing == WordTimingSource.ESTIMATED,
         "trailingSpace": bool(w.trailing_space),
+        "emphasis": bool(w.emphasis),
+        "background": False,
+        "spacer": False,
     }
 
 
-def line_to_row(line: Line, gap_after: float = 0.0) -> dict[str, Any]:
-    """บรรทัด -> แถวของ model"""
+_OPEN = "(（"
+_CLOSE = ")）"
+
+
+def split_background(words: list[Word]) -> list[dict[str, Any]]:
+    """คำในวงเล็บ = เสียงประสาน/เสียงสะท้อน: แยกเป็นแถวเล็กใต้บรรทัดหลัก (แบบ Apple Music) — ใช้เวลารายคำเดิม ไม่เพิ่มจำนวนบรรทัดของ model
+    คืนรายการ dict ของ QML: คำหลักก่อน แล้วคำเว้น {"spacer": True} (ดันขึ้นบรรทัดใหม่ใน Flow) แล้วคำเสียงประสาน (background=True) ·
+    ตัดเครื่องหมายวงเล็บออกจากข้อความที่แสดง · บรรทัดที่เป็นวงเล็บทั้งบรรทัดถือเป็นบรรทัดปกติ (ไม่เหลือบรรทัดหลักให้แสดง)"""
+    main: list[dict[str, Any]] = []
+    bg: list[dict[str, Any]] = []
+    depth = 0
+    for w in words:
+        opens = sum(w.text.count(c) for c in _OPEN)
+        closes = sum(w.text.count(c) for c in _CLOSE)
+        is_bg = depth > 0 or opens > 0
+        depth = max(0, depth + opens - closes)
+        shown = "".join(ch for ch in w.text if ch not in _OPEN + _CLOSE)
+        if not shown.strip():
+            continue
+        d = word_to_dict(w)
+        d["text"] = shown
+        d["background"] = is_bg
+        (bg if is_bg else main).append(d)
+    if not main:   # ทั้งบรรทัดอยู่ในวงเล็บ: แสดงเป็นบรรทัดปกติ
+        for d in bg:
+            d["background"] = False
+        return bg
+    if not bg:
+        return main
+    if main:
+        main[-1]["trailingSpace"] = False
+    return main + [{"spacer": True, "text": "", "start": 0.0, "end": 0.0, "estimated": False, "trailingSpace": False, "emphasis": False,
+                    "background": False}] + bg
+
+
+def line_to_row(line: Line, gap_after: float = 0.0, gap_start: float | None = None) -> dict[str, Any]:
+    """บรรทัด -> แถวของ model (gap_start = เวลาที่ช่วงดนตรีหลังบรรทัดนี้เริ่ม ไม่ระบุ = ท้ายบรรทัด)"""
     return {
         "start": float(line.start),
         "end": float(line.end),
         "voice": line.voice.value,
-        "words": [word_to_dict(w) for w in line.words],
+        "words": split_background(line.words),
         "translation": line.translation or "",
         "romanization": line.romanization or "",
         "text": line.text,
         "gapAfter": gap_after,
+        "gapStart": float(line.end if gap_start is None else gap_start),
     }
 
 
-def lyrics_to_rows(lyrics: Lyrics) -> list[dict[str, Any]]:
-    """แปลงเนื้อเพลงทั้งชุดเป็นแถว (เรียงตามเวลาเริ่มอยู่แล้ว) พร้อมคำนวณช่วงดนตรีหลังแต่ละบรรทัด"""
+def lyrics_to_rows(lyrics: Lyrics, vocal_gaps: list[tuple[float, float]] | None = None) -> list[dict[str, Any]]:
+    """แปลงเนื้อเพลงทั้งชุดเป็นแถว (เรียงตามเวลาเริ่มอยู่แล้ว) พร้อมคำนวณช่วงดนตรีหลังแต่ละบรรทัด
+
+    vocal_gaps = ช่วงที่ AI ฟังแล้วไม่มีเสียงร้อง (เฟส 4) — ถ้ามี ใช้ตัดสินแทนช่องว่างของเวลาเนื้อเพลง:
+    ช่องว่างระหว่างบรรทัดที่ AI ได้ยินเสียงร้องอยู่ (เนื้อเพลงไม่ครบ) ไม่แสดงจุด · ไม่มี = ใช้ช่องว่างจากเวลาเนื้อเพลง (GAP_MIN_S)
+    """
     rows: list[dict[str, Any]] = []
     lines = lyrics.lines
     for i, ln in enumerate(lines):
-        gap = 0.0
+        gap, start = 0.0, None
         if i + 1 < len(lines):
-            g = lines[i + 1].start - ln.end
-            gap = g if g > GAP_MIN_S else 0.0
-        rows.append(line_to_row(ln, gap))
+            nxt = lines[i + 1].start
+            if vocal_gaps is None:
+                g = nxt - ln.end
+                gap = g if g > GAP_MIN_S else 0.0
+            else:
+                best = 0.0
+                for gs, ge in vocal_gaps:
+                    lo, hi = max(gs, ln.end), min(ge, nxt)
+                    if hi - lo > best:
+                        best, start = hi - lo, lo
+                gap = best if best >= GAP_MIN_S else 0.0
+                if gap <= 0.0:
+                    start = None
+        rows.append(line_to_row(ln, gap, start))
     return rows
+
+
+def edge_gaps(lyrics: Lyrics, vocal_gaps: list[tuple[float, float]] | None, duration: float = 0.0) -> tuple[tuple[float, float] | None, tuple[float, float] | None]:
+    """ช่วงดนตรีก่อนบรรทัดแรก (อินโทร) และหลังบรรทัดสุดท้าย (เอาท์โทร) เมื่อ AI บอกว่าไม่มีเสียงร้อง ≥ GAP_MIN_S"""
+    if not lyrics.lines or not vocal_gaps:
+        return None, None
+    first, last = lyrics.lines[0].start, lyrics.lines[-1].end
+    intro = outro = None
+    for gs, ge in vocal_gaps:
+        lo, hi = gs, min(ge, first)
+        if lo < first and hi - lo >= GAP_MIN_S and (intro is None or hi - lo > intro[1] - intro[0]):
+            intro = (lo, hi)
+        lo2, hi2 = max(gs, last), ge if duration <= 0 else min(ge, duration)
+        if hi2 - lo2 >= GAP_MIN_S and (outro is None or hi2 - lo2 > outro[1] - outro[0]):
+            outro = (lo2, hi2)
+    return intro, outro
+
+
+def _continues(a: dict[str, Any], b: dict[str, Any]) -> bool:
+    """บรรทัด b ดูเป็นการร้องต่อจาก a ไหม (ขึ้นต้นด้วยตัวพิมพ์เล็ก/วงเล็บ หรือ a จบด้วยจุลภาค)"""
+    bt = str(b.get("text", "")).lstrip()
+    if not bt:
+        return False
+    first = next((c for c in bt if c.isalpha() or c == "("), "")
+    if first == "(" or first.islower():
+        return True
+    return str(a.get("text", "")).rstrip().endswith((",", "、", "，"))
+
+
+MAX_GROUP_LINES = 3  # ท่อนเดียวกันรวมได้ไม่เกินกี่บรรทัด (กันลูกโซ่ลามทั้งเพลง)
+
+
+def _linked(rows: list[dict[str, Any]], a: int, gap_s: float) -> bool:
+    """บรรทัด a กับ a+1 เป็นท่อนเดียวกันไหม"""
+    ra, rb = rows[a], rows[a + 1]
+    gap = float(rb["start"]) - float(ra["end"])
+    if gap > gap_s:
+        return False
+    if gap < -0.1:
+        return True                          # เวลาทับกันจริง (เช่นเสียงประสานร้องพร้อมกัน)
+    # เวลาของบรรทัดจาก LRC มักติดกันพอดี (จบ = เริ่มบรรทัดถัดไป) จึงใช้ "เวลาติดกัน" อย่างเดียวไม่ได้ ต้องดูเหมือนประโยคต่อกันด้วย
+    return rb.get("voice") == "background" or _continues(ra, rb)
+
+
+def group_rows(rows: list[dict[str, Any]], gap_s: float) -> list[tuple[int, int]]:
+    """แบ่งบรรทัดเป็นท่อน [(first, last), ...] จากซ้ายไปขวา — รวมบรรทัดที่ร้องต่อเนื่องกัน ท่อนละไม่เกิน MAX_GROUP_LINES"""
+    groups: list[tuple[int, int]] = []
+    n = len(rows)
+    i = 0
+    while i < n:
+        j = i
+        while j + 1 < n and j - i + 1 < MAX_GROUP_LINES and _linked(rows, j, gap_s):
+            j += 1
+        groups.append((i, j))
+        i = j + 1
+    return groups
+
+
+def group_range(rows: list[dict[str, Any]], i: int, gap_s: float) -> tuple[int, int]:
+    """ช่วงบรรทัด [first, last] ที่เป็น "ท่อนเดียวกัน" กับบรรทัด i (ใช้ให้บรรทัดก่อนหน้าในท่อนค้างความสว่าง แล้วจางพร้อมกันเมื่อจบท่อน)"""
+    if not (0 <= i < len(rows)):
+        return (i, i)
+    for lo, hi in group_rows(rows, gap_s):
+        if lo <= i <= hi:
+            return (lo, hi)
+    return (i, i)
 
 
 def find_line_index(starts: list[float], position: float) -> int:
@@ -80,7 +200,7 @@ def make_lyrics_model_class() -> type:
         Signal,
     )
 
-    names = ("start", "end", "voice", "words", "translation", "romanization", "text", "gapAfter")
+    names = ("start", "end", "voice", "words", "translation", "romanization", "text", "gapAfter", "gapStart")
     role_ids = {n: int(Qt.ItemDataRole.UserRole) + 1 + i for i, n in enumerate(names)}
 
     class LyricsModel(QAbstractListModel):
@@ -119,6 +239,42 @@ def make_lyrics_model_class() -> type:
             self.endResetModel()
             self.countChanged.emit()
 
+        def retime(self, lyrics: Lyrics, vocal_gaps: list[tuple[float, float]] | None = None) -> None:
+            """AI จัดเวลาใหม่ (จำนวนบรรทัดเท่าเดิม): แก้เวลา/คำ/ช่วงดนตรีของแต่ละบรรทัดแทนที่ ไม่รีเซ็ต model (คำแปล/ตำแหน่งเลื่อนคงเดิม)"""
+            rows = lyrics_to_rows(lyrics, vocal_gaps)
+            if len(rows) != len(self._rows):
+                self.set_lyrics(lyrics)
+                return
+            changed = False
+            for i, new in enumerate(rows):
+                old = self._rows[i]
+                keep_tr, keep_ro = old["translation"], old["romanization"]
+                if all(old[k] == new[k] for k in ("start", "end", "words", "gapAfter", "gapStart", "voice")):
+                    continue
+                new["translation"], new["romanization"] = new["translation"] or keep_tr, new["romanization"] or keep_ro
+                self._rows[i] = new
+                idx = self.index(i, 0)
+                self.dataChanged.emit(idx, idx, [role_ids[n] for n in ("start", "end", "voice", "words", "gapAfter", "gapStart", "translation", "romanization")])
+                changed = True
+            if changed:
+                self._starts = [r["start"] for r in self._rows]
+
+        def set_translations(self, translations: list[str]) -> bool:
+            """ใส่คำแปลทีละบรรทัด (ลำดับตรงกับบรรทัด) คืน True เมื่อจำนวนตรงและมีผล"""
+            if len(translations) != len(self._rows):
+                return False
+            for i, tr in enumerate(translations):
+                tr = tr or ""
+                if self._rows[i]["translation"] != tr:
+                    self._rows[i]["translation"] = tr
+                    idx = self.index(i, 0)
+                    self.dataChanged.emit(idx, idx, [role_ids["translation"]])
+            return True
+
+        def set_gaps(self, lyrics: Lyrics, vocal_gaps: list[tuple[float, float]] | None) -> None:
+            """ใส่ช่วงเสียงร้องจาก AI โดยไม่แตะเวลาเดิม (เช่น ตอนเนื้อเพลงไม่ตรงเวอร์ชันและคงเวลาเดิมไว้)"""
+            self.retime(lyrics, vocal_gaps)
+
         def clear(self) -> None:
             if not self._rows:
                 return
@@ -153,6 +309,9 @@ def make_lyrics_model_class() -> type:
         # ---------- ค้นหา ----------
         def line_index_at(self, position: float) -> int:
             return find_line_index(self._starts, position)
+
+        def group_range(self, i: int, gap_s: float) -> tuple[int, int]:
+            return group_range(self._rows, i, gap_s)
 
         def line_count(self) -> int:
             return len(self._rows)

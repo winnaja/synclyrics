@@ -1,7 +1,7 @@
 # SyncLyrics — การตั้งค่าเริ่มต้น (ไฟล์นี้สร้างอัตโนมัติจาก app/core/config.py: Settings)
 # ห้ามแก้ไฟล์นี้ด้วยมือ — แก้ค่าเริ่มต้นในโค้ดแล้วรัน scripts/gen_default_settings.py
 # ค่าที่ผู้ใช้เปลี่ยนในหน้าตั้งค่าจะถูกเก็บที่ %LOCALAPPDATA%\SyncLyrics\settings.yaml
-version: 1
+version: 3
 lyrics_look:
   font_family: SF Thonburi
   font_fallbacks:
@@ -22,8 +22,8 @@ lyrics_look:
   blur_strength: 1.0
   glow_strength: 1.0
   animation_speed: 1.0
-  spring_stiffness: 170.0
-  spring_damping: 26.0
+  spring_stiffness: 256.0
+  spring_damping: 32.0
   highlight_effect: wipe
   show_translation: true
   translation_scale: 0.55
@@ -52,10 +52,128 @@ desktop_lyrics:
   x: null
   y: null
   width: null
+overlay:
+  mode: focus
+  visible: true
+  always_on_top: true
+  locked: false
+  click_through: false
+  remember_position: true
+  start_position: bottom_center
+  monitor: 0
+  window_opacity: 1.0
+  blur_behind: true
+  x: null
+  y: null
+  w_minimal: 760
+  h_minimal: 110
+  w_focus: 760
+  h_focus: 230
+  w_full: 1000
+  h_full: 680
+  theme: soft_dark
+  bg_style: soft_dark
+  bg_color: '#0B0B10'
+  bg_color2: '#1B1F3B'
+  bg_opacity: 0.62
+  border_opacity: 0.08
+  shadow: 0.5
+  corner_radius: 22
+  text_color: '#F5F5F7'
+  accent_color: '#A5B4FC'
+  inactive_color: '#777780'
+  secondary_color: '#A1A1AA'
+  text_opacity: 1.0
+  inactive_opacity: 0.5
+  text_shadow: 0.6
+  font_size: 34
+  text_width: 1.0
+  font_weight: 700
+  weight_boost: 100
+  line_spacing: 1.15
+  letter_spacing: 0.0
+  align: center
+  visible_lines: 3
+  highlight: fill
+  animation: fade_move
+  animation_intensity: 1.0
+  reduced_motion: false
+  anim_preset: smooth
+  anim_speed: 1.0
+  wave_ms: 30
+  blur: 0.35
+  falloff: 0.12
+  idle_scale: 0.92
+  lift_px: 0.0
+  word_anim: none
+  word_ease: smooth
+  word_anim_ms: 420
+  word_scale: 1.0
+  word_stay: true
+  glow_strength: 0.0
+  glow_color: '#FFFFFF'
+  word_hold_ms: 250
+  word_release_ms: 700
+  emph_on: false
+  emph_min_s: 1.2
+  emph_glow: 0.9
+  emph_scale: 1.08
+  group_lines: true
+  group_gap_s: 0.6
+  auto_scroll: true
+  resume_s: 3.0
+  click_seek: true
+  show_source: true
+  translation_size: 0.55
+  show_translation: true
+  hover_controls: true
+fullwindow:
+  open: true
+  start_full: true
+  fullscreen: false
+  maximized: true
+  x: null
+  y: null
+  w: 1180
+  h: 740
+  background: fluid
+  brightness: 0.85
+  font_scale: 1.0
+  lyrics_visible: true
+  align: left
+  cover_scale: 1.0
+  show_volume: true
+  show_translation: true
+  inactive_opacity: 0.45
+  blur: 0.7
+  falloff: 0.01
+  text_color: '#FFFFFF'
+  accent_color: '#FFFFFF'
+  inactive_color: '#FFFFFF'
+  secondary_color: '#FFFFFF'
+  edge_blur: 0.8
+  edge_fade: 0.14
+  idle_hide: true
+  idle_hide_s: 3.0
+hotkeys:
+  show_hide: Ctrl+Alt+L
+  click_through: Ctrl+Alt+K
+  lock: Ctrl+Alt+O
+  full_toggle: Ctrl+Alt+F
+  translation: Ctrl+Alt+T
+  font_up: Ctrl+Alt+Up
+  font_down: Ctrl+Alt+Down
+  offset_later: Ctrl+Alt+Right
+  offset_earlier: Ctrl+Alt+Left
+  offset_reset: Ctrl+Alt+0
+ai:
+  enabled: true
+  translate: true
 lyrics_sources:
   enabled: {}
   allow_ai_transcribe: true
 playback:
+  app_audio: false
   preload_at_percent: 50
   first_chunk_s: 25.0
   cache_max_gb: 10.0
@@ -88,6 +206,8 @@ automix:
 startup:
   launch_with_windows: false
   minimize_to_tray: true
+  close_to_tray: true
+  language: th
   open_browser: youtube
   extension_sends_current_video: true
 theme: minimal

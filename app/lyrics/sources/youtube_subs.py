@@ -35,6 +35,11 @@ def rank_subtitles(subs: dict[str, list[dict[str, Any]]], track_text: str = "") 
     pref = _preference(track_text)
     langs = [lang for lang in subs if lang != "live_chat"]
     langs.sort(key=lambda lang: next((i for i, p in enumerate(pref) if lang.lower().startswith(p)), 99))
+    # ชื่อวิดีโอเป็นไทย/ญี่ปุ่น/เกาหลี แต่คำบรรยายที่มีไม่ตรงภาษานั้นเลย = เป็น "คำแปล" ไม่ใช่เนื้อร้อง
+    # (เช่น MV ไทยที่มีแค่คำบรรยายอังกฤษ) — ไม่ส่งไป ให้แหล่งอื่นที่มีเนื้อต้นฉบับทำหน้าที่แทน
+    guess = detect_language(track_text)
+    if guess in ("th", "ja", "ko"):
+        langs = [lang for lang in langs if lang.lower().startswith(guess)]
     out: list[tuple[str, str]] = []
     for lang in langs:
         for fmt in subs[lang]:

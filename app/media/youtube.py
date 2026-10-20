@@ -3,7 +3,7 @@
 ใช้ yt-dlp แบบ Python API ใน thread ของ IO (ไม่ใช่ UI thread)
 cookies: ลอง cookiesfrombrowser=("chrome",) ก่อน -> ถ้า Chrome ล็อกไฟล์/ถอดรหัสไม่ได้
 ใช้ paths.cookies_file (cookies.txt ที่ผู้ใช้ export เอง) -> ถ้าไม่มีทั้งคู่ เล่นแบบไม่ล็อกอิน + แจ้งผู้ใช้
-เลือกสตรีมเสียง bitrate สูงสุดที่บัญชีเข้าถึงได้ (Premium มักได้ opus/aac ที่สูงกว่า)
+เลือกสตรีมเสียง bitrate สูงสุดที่บัญชีเข้าถึงได้ (ตรวจ 2026-10-20: ไม่ว่าจะล็อกอินหรือไม่ได้สูงสุด opus ~137k เท่ากัน — cookies มีประโยชน์กับวิดีโอจำกัดอายุ/ต้องล็อกอิน)
 YouTube ต้องใช้ JS runtime แก้โจทย์ n-challenge: ใช้ Node.js ที่อยู่ใน PATH (ผ่าน yt-dlp-ejs)
 
 กฎความปลอดภัย: ห้าม log/คืนค่า cookies ใดๆ — ข้อความ error ผ่าน redact() เสมอ
@@ -100,8 +100,9 @@ class YouTubeClient:
         return opts
 
     def _mode_order(self) -> list[CookieMode]:
-        """ลองโหมดที่เคยใช้ได้ก่อน แล้วค่อยลดระดับ: chrome -> file -> none"""
-        order: list[CookieMode] = ["chrome", "file", "none"]
+        """ลองโหมดที่เคยใช้ได้ก่อน แล้วค่อยลดระดับ · มี cookies.txt = ลองไฟล์ก่อน Chrome (cookies จาก Chrome ที่เปิดอยู่
+        อ่านไม่ได้บนเครื่องผู้ใช้ และการลองครั้งแรกเสียเวลา ~1.5 วิทุกครั้งที่เปิดโปรแกรม): file -> chrome -> none"""
+        order: list[CookieMode] = ["file", "chrome", "none"] if self.cookies_file.exists() else ["chrome", "file", "none"]
         if self.cookie_mode in order:
             order.remove(self.cookie_mode)
             order.insert(0, self.cookie_mode)
@@ -313,7 +314,7 @@ class YouTubeClient:
                 notes.append(f"{mode}: {redact(str(e))[:160]}")
         self.cookie_mode = "none"
         return "none", (
-            "ดึง cookies ไม่ได้ จึงเล่นแบบไม่ล็อกอิน (คุณภาพเสียงอาจต่ำกว่า Premium) — "
+            "ดึง cookies ไม่ได้ จึงเล่นแบบไม่ล็อกอิน (เสียงที่ดึงได้ไม่ต่างกัน แต่วิดีโอจำกัดอายุ/ต้องล็อกอินจะโหลดไม่ได้) — "
             "ปิด Chrome แล้วลองใหม่ หรือ export cookies.txt ไปไว้ที่ " + str(self.cookies_file)
             + " | " + " ; ".join(notes)
         )
@@ -322,6 +323,34 @@ class YouTubeClient:
 def self_update_ytdlp() -> str | None:
     """อัปเดต yt-dlp (pip install -U yt-dlp) คืนเวอร์ชันใหม่ หรือ None ถ้าไม่ได้อัปเดต — เฟส 8"""
     raise NotImplementedError("เฟส 8")
+
+
+async def fetch_oembed(video_id: str, client: Any = None, timeout_s: float = 4.0) -> tuple[str, str] | None:
+    """ชื่อวิดีโอ + ชื่อช่องที่ถูกต้องจาก oEmbed ของ YouTube (เร็ว ~0.2 วิ ไม่ต้องใช้ key/cookies/yt-dlp)
+
+    ใช้ยืนยันว่าชื่อเพลงตรงกับ videoId (ไม่เชื่อชื่อที่ส่วนขยายอ่านจากหน้าเว็บ ซึ่งอาจเป็นของเพลงก่อนหน้าตอนเปลี่ยนเพลง)
+    คืน (title, author) หรือ None ถ้าดึงไม่ได้ (วิดีโอส่วนตัว/ถูกลบ/ไม่มีเน็ต)
+    """
+    own = client is None
+    if own:
+        import httpx
+
+        client = httpx.AsyncClient(follow_redirects=True)
+    try:
+        r = await client.get("https://www.youtube.com/oembed",
+                             params={"url": f"https://www.youtube.com/watch?v={video_id}", "format": "json"},
+                             timeout=timeout_s)
+        if r.status_code != 200:
+            return None
+        d = r.json()
+        title = str(d.get("title") or "").strip()
+        return (title, str(d.get("author_name") or "").strip()) if title else None
+    except Exception as e:  # noqa: BLE001
+        log.debug("oEmbed ไม่สำเร็จ", extra={"data": {"err": repr(e)}})
+        return None
+    finally:
+        if own:
+            await client.aclose()
 
 
 def parse_video_id(text: str) -> str | None:

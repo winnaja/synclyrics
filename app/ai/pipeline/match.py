@@ -1,0 +1,474 @@
+"""จับคู่เนื้อเพลงกับ "คำที่ AI ฟังได้" (transcript จาก Whisper) เพื่อหาเวลาจริงของทุกบรรทัด/ทุกคำ
+
+ไม่พึ่ง torch/numpy — ทดสอบได้ตรงๆ และใช้ได้ทั้งใน worker และ process หลัก
+
+หลักคิด (เนื้อเพลงสำเร็จรูป = ข้อความที่ถูกต้อง, เสียงจริง = เวลาที่ถูกต้อง):
+  1. แตกเนื้อเพลงและ transcript เป็นสตรีมตัวอักษรที่ normalize แล้ว (ไม่สนช่องว่าง/วรรคตอน/ตัวพิมพ์ — ภาษาไทย/ญี่ปุ่น/จีน
+     ไม่มีช่องว่างคั่นคำ จึงจับคู่ระดับตัวอักษรเหมือนกันทุกภาษา)
+  2. difflib.SequenceMatcher หาช่วงที่ตรงกัน (เรียงตามลำดับเสมอ ไม่ไขว้) — ทน Whisper ฟังผิดบางคำ/ข้ามบางช่วง
+  3. ตัวอักษรที่จับคู่ได้ ได้เวลาจากคำที่ Whisper ฟัง (ตัวอักษรในคำกระจายเท่าๆ กันตลอดความยาวคำ)
+  4. บรรทัดที่จับคู่ได้พอ = "resolved" เวลาตามเสียงจริง · บรรทัดที่เหลือ = ใช้เวลาต้นฉบับ (ถ้ามี) ที่ยืด/เลื่อนตามจุดยึดข้างเคียง
+     ถ้าต้นฉบับไม่มีเวลาเลย กระจายตามจำนวนตัวอักษรในช่องว่างระหว่างจุดยึด
+ผลคือแก้ได้ทั้งเวลาเลื่อนทั้งเพลง (MV มีฉากเปิดเรื่อง) และโครงสร้างต่างจากต้นฉบับ (รีมิกซ์) โดยไม่เชื่อเวลาต้นฉบับเกินจำเป็น
+"""
+
+from __future__ import annotations
+
+import unicodedata
+from dataclasses import dataclass, field
+from difflib import SequenceMatcher
+from statistics import median
+
+# เวลาต่อตัวอักษรเมื่อต้องเดา (วินาที) — ใช้ขยายหัว/ท้ายบรรทัดที่จับคู่ได้ไม่ครบ และกระจายบรรทัดที่ไม่มีเวลาเลย
+DEFAULT_CHAR_S = 0.11
+MAX_CHAR_S = 0.30
+MIN_BLOCK = 3            # ช่วงที่ตรงกันสั้นกว่านี้ถือเป็นบังเอิญ (ตัวอักษรซ้ำๆ)
+RESOLVE_RATIO = 0.4      # บรรทัดที่จับคู่ได้ ≥ สัดส่วนนี้ของตัวอักษร = resolved
+MIN_WORD_S = 0.04
+MAX_SCAN_CHARS = 9000    # SequenceMatcher เป็น O(n²) — เกินนี้ตัดทิ้งท้าย (เพลงจริงไม่ถึง)
+
+
+@dataclass(slots=True)
+class TWord:
+    """คำที่ AI ฟังได้ (เวลาสัมบูรณ์ของเพลง)"""
+
+    text: str
+    start: float
+    end: float
+    prob: float = 1.0
+
+
+@dataclass(slots=True)
+class InLine:
+    """บรรทัดเนื้อเพลงขาเข้า: ข้อความของแต่ละคำ + เวลาต้นฉบับ (None = ไม่มี)"""
+
+    words: list[str]
+    start: float | None = None
+    end: float | None = None
+    word_times: list[tuple[float, float]] | None = None   # เวลาต้นฉบับรายคำ (ถ้ามี) ใช้ยืด/เลื่อนตามบรรทัดที่ไม่ resolved
+    word_probs: list[float] | None = None                 # ความมั่นใจของ Whisper รายคำ (เฉพาะบรรทัดที่สร้างจาก transcript)
+
+
+@dataclass(slots=True)
+class OutLine:
+    start: float
+    end: float
+    words: list[tuple[float, float, float]]   # (start, end, confidence)
+    resolved: bool                             # True = เวลามาจากเสียงจริงของบรรทัดนี้เอง
+    quality: float                             # สัดส่วนตัวอักษรที่จับคู่ได้ 0-1
+
+
+@dataclass(slots=True)
+class MatchResult:
+    lines: list[OutLine]
+    coverage: float                            # ตัวอักษรเนื้อเพลงที่จับคู่ได้ทั้งหมด / ทั้งหมด (ต่ำ = เนื้อเพลงอาจเป็นคนละเวอร์ชัน)
+    offset_s: float | None = None              # ค่ามัธยฐานของ (เวลาจริง − เวลาต้นฉบับ) ของบรรทัด resolved
+    scale: float | None = None                 # อัตราส่วนความยาว (เวลาจริง/ต้นฉบับ) คร่าวๆ จากบรรทัดแรก-สุดท้ายที่ resolved
+    notes: list[str] = field(default_factory=list)
+
+
+def _has_cjk(text: str) -> bool:
+    return any("一" <= c <= "鿿" for c in text)
+
+
+def _to_simplified(text: str) -> str:
+    """จีนตัวเต็ม -> ตัวย่อ (Whisper ตอบตัวเต็ม/ตัวย่อสลับกันตามอำเภอใจ แต่เนื้อเพลงอาจเป็นอีกแบบ) · ไม่มี zhconv = ไม่แปลง (ไม่พัง)"""
+    try:
+        from zhconv import convert
+
+        return convert(text, "zh-cn")
+    except Exception:  # noqa: BLE001
+        return text
+
+
+def norm_chars(text: str) -> str:
+    """เก็บเฉพาะตัวอักษร/ตัวเลข/เครื่องหมายประกอบ (สระ-วรรณยุกต์ไทย) แปลงเป็นตัวพิมพ์เล็กแบบ NFKC · จีนแปลงเป็นตัวย่อก่อน"""
+    if _has_cjk(text):
+        text = _to_simplified(text)
+    out = []
+    for c in unicodedata.normalize("NFKC", text).casefold():
+        if unicodedata.category(c)[0] in "LNM":
+            out.append(c)
+    return "".join(out)
+
+
+def _transcript_stream(words: list[TWord]) -> tuple[str, list[tuple[float, float]], list[float]]:
+    chars: list[str] = []
+    times: list[tuple[float, float]] = []
+    probs: list[float] = []
+    for w in words:
+        t = norm_chars(w.text)
+        n = len(t)
+        if n == 0:
+            continue
+        dur = max(w.end - w.start, MIN_WORD_S)
+        for k, c in enumerate(t):
+            chars.append(c)
+            times.append((w.start + dur * k / n, w.start + dur * (k + 1) / n))
+            probs.append(w.prob)
+    return "".join(chars), times, probs
+
+
+def match_lines(lines: list[InLine], transcript: list[TWord], min_block: int = MIN_BLOCK) -> MatchResult:
+    """จับคู่เนื้อเพลงทั้งชุดกับ transcript คืนเวลาของทุกบรรทัด (บรรทัดละ 1 ผล ตามลำดับเดิม)"""
+    # ---- สตรีมเนื้อเพลง ----
+    lchars: list[str] = []
+    lmap: list[tuple[int, int]] = []          # (บรรทัด, คำ) ของแต่ละตัวอักษร
+    for li, ln in enumerate(lines):
+        for wi, w in enumerate(ln.words):
+            for c in norm_chars(w):
+                lchars.append(c)
+                lmap.append((li, wi))
+    lyric_s = "".join(lchars)
+    trans_s, ttimes, tprobs = _transcript_stream(transcript)
+    total = len(lyric_s)
+
+    ctime: list[tuple[float, float] | None] = [None] * total
+    if total and trans_s:
+        sm = SequenceMatcher(None, lyric_s[:MAX_SCAN_CHARS], trans_s[:MAX_SCAN_CHARS], autojunk=False)
+        for i, j, n in sm.get_matching_blocks():
+            if n < min_block:
+                continue
+            for k in range(n):
+                ctime[i + k] = ttimes[j + k]
+
+    # ---- ต่อบรรทัด ----
+    per_line: list[list[int]] = [[] for _ in lines]      # ดัชนีตัวอักษรของแต่ละบรรทัด
+    for idx, (li, _wi) in enumerate(lmap):
+        per_line[li].append(idx)
+
+    results: list[OutLine | None] = [None] * len(lines)
+    matched_total = 0
+    for li, idxs in enumerate(per_line):
+        if not idxs:
+            continue
+        hit = _dominant_cluster([k for k in idxs if ctime[k] is not None], ctime)
+        for k in idxs:       # ตัวอักษรที่จับคู่ไปติดกับเสียงอีกช่วงหนึ่ง (บังเอิญตรงกับท่อนซ้ำ) ไม่นับเป็นของบรรทัดนี้
+            if ctime[k] is not None and k not in hit:
+                ctime[k] = None
+        matched_total += len(hit)
+        quality = len(hit) / len(idxs)
+        if len(hit) >= 2 and quality >= RESOLVE_RATIO:
+            results[li] = _resolve_line(lines[li], idxs, ctime, lmap, quality)
+
+    notes: list[str] = []
+    _reject_outliers(lines, results)
+    resolved_idx = [i for i, r in enumerate(results) if r is not None]
+    _fill_unresolved(lines, results, resolved_idx, notes)
+
+    coverage = matched_total / total if total else 0.0
+    offs = [results[i].start - lines[i].start for i in resolved_idx if lines[i].start is not None]  # type: ignore[union-attr]
+    offset = float(median(offs)) if offs else None
+    scale = None
+    srcs = [i for i in resolved_idx if lines[i].start is not None]
+    if len(srcs) >= 2:
+        a, b = srcs[0], srcs[-1]
+        d_src = lines[b].start - lines[a].start  # type: ignore[operator]
+        if d_src > 10:
+            scale = (results[b].start - results[a].start) / d_src  # type: ignore[union-attr]
+    final = [r if r is not None else OutLine(0.0, 0.0, [], False, 0.0) for r in results]
+    return MatchResult(lines=final, coverage=coverage, offset_s=offset, scale=scale, notes=notes)
+
+
+MAX_CLUSTER_GAP_S = 3.5   # ตัวอักษรของบรรทัดเดียวกันที่จับคู่ได้ ห่างกันเกินนี้ = ติดกับเสียงคนละช่วง
+
+
+def _dominant_cluster(hit: list[int], ctime: list[tuple[float, float] | None]) -> list[int]:
+    """ตัวอักษรที่จับคู่ได้ของบรรทัดหนึ่ง อาจกระจายไปหลายช่วงเสียง (เช่นคำซ้ำในฮุกคนละท่อน) — เก็บเฉพาะกลุ่มที่อยู่ใกล้กันและมากที่สุด"""
+    if len(hit) <= 1:
+        return hit
+    clusters: list[list[int]] = [[hit[0]]]
+    for a, b in zip(hit, hit[1:]):
+        if ctime[b][0] - ctime[a][1] > MAX_CLUSTER_GAP_S:  # type: ignore[index]
+            clusters.append([])
+        clusters[-1].append(b)
+    return max(clusters, key=len)
+
+
+OUTLIER_S = 6.0      # เวลาที่จับคู่ได้ ต่างจาก "แนวโน้มของบรรทัดข้างเคียงที่ตรงกันเอง" เกินนี้ = จับคู่ผิด (เช่นไปติดกับฮุกอีกรอบ)
+NEIGHBOR_AGREE_S = 3.0
+
+
+def _reject_outliers(lines: list[InLine], results: list[OutLine | None]) -> None:
+    """บรรทัดที่เลื่อนจากเวลาต้นฉบับผิดแปลกจากบรรทัดที่ resolved ทั้งสองข้าง (ซึ่งเลื่อนเท่าๆ กัน) = จับคู่ผิด ปล่อยให้ประมาณจากจุดยึดแทน
+    ไม่กระทบกรณีโครงสร้างเปลี่ยนจริง (เช่น MV มีฉากแทรก): ตรงนั้นสองข้างเลื่อนต่างกัน จึงไม่ถือว่าเห็นตรงกัน"""
+    idx = [i for i, r in enumerate(results) if r is not None and lines[i].start is not None]
+    dev = {i: results[i].start - float(lines[i].start) for i in idx}  # type: ignore[union-attr, arg-type]
+    for k in range(1, len(idx) - 1):
+        a, i, b = idx[k - 1], idx[k], idx[k + 1]
+        if abs(dev[a] - dev[b]) < NEIGHBOR_AGREE_S and abs(dev[i] - (dev[a] + dev[b]) / 2) > OUTLIER_S:
+            results[i] = None
+
+
+def _resolve_line(line: InLine, idxs: list[int], ctime: list[tuple[float, float] | None],
+                  lmap: list[tuple[int, int]], quality: float) -> OutLine:
+    """บรรทัดที่จับคู่ได้พอ: ทุกตัวอักษรได้เวลา (ตัวที่จับคู่ไม่ได้ interpolate ในบรรทัด) แล้วรวมเป็นเวลาของคำ"""
+    first, last = idxs[0], idxs[-1]
+    known = [k for k in idxs if ctime[k] is not None]
+    # วินาทีต่อตัวอักษรของบรรทัดนี้ (ไว้ขยายหัว/ท้าย) — จากช่วงที่จับคู่ได้ ไม่เกินเพดาน
+    span = ctime[known[-1]][1] - ctime[known[0]][0]  # type: ignore[index]
+    per = max(0.03, min(MAX_CHAR_S, span / max(1, known[-1] - known[0] + 1))) if known[-1] > known[0] else DEFAULT_CHAR_S
+    starts: dict[int, float] = {}
+    ends: dict[int, float] = {}
+    for k in known:
+        starts[k], ends[k] = ctime[k]  # type: ignore[misc]
+    # หัว/ท้ายที่จับคู่ไม่ได้ ขยายออกด้วย per
+    for k in range(known[0] - 1, first - 1, -1):
+        ends[k] = starts[k + 1]
+        starts[k] = ends[k] - per
+    for k in range(known[-1] + 1, last + 1):
+        starts[k] = ends[k - 1]
+        ends[k] = starts[k] + per
+    # ช่องกลางที่จับคู่ไม่ได้ interpolate ระหว่างตัวที่รู้เวลาสองข้าง
+    for a, b in zip(known, known[1:]):
+        gap = b - a - 1
+        if gap <= 0:
+            continue
+        t0, t1 = ends[a], starts[b]
+        step = (t1 - t0) / gap if t1 > t0 else 0.0
+        step = min(step, MAX_CHAR_S)
+        for n in range(gap):
+            starts[a + 1 + n] = t0 + step * n
+            ends[a + 1 + n] = t0 + step * (n + 1)
+    # รวมเป็นคำ
+    by_word: dict[int, list[int]] = {}
+    for k in idxs:
+        by_word.setdefault(lmap[k][1], []).append(k)
+    words: list[tuple[float, float, float]] = []
+    prev_end = -1e9
+    for wi in range(len(line.words)):
+        ks = by_word.get(wi)
+        if not ks:  # คำที่ไม่มีตัวอักษรเลย (เช่นเครื่องหมายล้วน) — ให้อยู่ท้ายคำก่อนหน้า
+            t = prev_end if prev_end > -1e8 else starts[first]
+            words.append((t, t, 0.2))
+            continue
+        s, e = starts[ks[0]], ends[ks[-1]]
+        s = max(s, prev_end) if prev_end > -1e8 else s
+        e = max(e, s + MIN_WORD_S)
+        conf = max(0.3, sum(1 for k in ks if ctime[k] is not None) / len(ks))
+        words.append((s, e, conf))
+        prev_end = e
+    return OutLine(words[0][0], words[-1][1], words, True, quality)
+
+
+def _fill_unresolved(lines: list[InLine], results: list[OutLine | None], resolved: list[int], notes: list[str]) -> None:
+    """บรรทัดที่ไม่ resolved: ยืด/เลื่อนเวลาต้นฉบับตามบรรทัด resolved ที่ใกล้ที่สุดสองข้าง (หรือกระจายตามตัวอักษรถ้าไม่มีเวลาเลย)"""
+    n = len(lines)
+    if not resolved:
+        notes.append("no_anchor")
+        return
+    for i in range(n):
+        if results[i] is not None:
+            continue
+        prev = max((r for r in resolved if r < i), default=None)
+        nxt = min((r for r in resolved if r > i), default=None)
+        results[i] = _estimate_line(lines, results, i, prev, nxt)
+
+
+def _line_chars(line: InLine) -> int:
+    return max(1, sum(len(norm_chars(w)) for w in line.words))
+
+
+def _estimate_line(lines: list[InLine], results: list[OutLine | None], i: int, prev: int | None, nxt: int | None) -> OutLine:
+    ln = lines[i]
+    if not ln.words:  # บรรทัดว่าง (ไม่มีคำ) — เก็บตำแหน่งไว้เฉยๆ
+        t = float(ln.start) if ln.start is not None else (results[prev].end if prev is not None else 0.0)  # type: ignore[union-attr]
+        return OutLine(t, t, [], False, 0.0)
+    has_src = ln.start is not None
+    pts: list[tuple[float, float]] = []   # (เวลาต้นฉบับ, เวลาใหม่) ของจุดยึด
+    for j in (prev, nxt):
+        if j is not None and lines[j].start is not None:
+            pts.append((float(lines[j].start), float(results[j].start)))  # type: ignore[arg-type, union-attr]
+    if has_src and pts:
+        if len(pts) == 2 and pts[1][0] - pts[0][0] > 1e-6:
+            k = (pts[1][1] - pts[0][1]) / (pts[1][0] - pts[0][0])
+            k = max(0.7, min(1.4, k))
+            ref_src, ref_new = pts[0]
+        else:
+            k, (ref_src, ref_new) = 1.0, pts[0]
+
+        def conv(t: float) -> float:
+            return ref_new + (t - ref_src) * k
+
+        s0 = conv(float(ln.start))  # type: ignore[arg-type]
+        if ln.word_times and len(ln.word_times) == len(ln.words):
+            words = [(conv(a), max(conv(b), conv(a) + MIN_WORD_S), 0.25) for a, b in ln.word_times]
+        else:
+            e0 = conv(float(ln.end if ln.end is not None else ln.start + DEFAULT_CHAR_S * _line_chars(ln)))  # type: ignore[operator]
+            words = _spread(ln, s0, max(e0, s0 + MIN_WORD_S))
+        return OutLine(words[0][0], words[-1][1], words, False, 0.0)
+    # ไม่มีเวลาต้นฉบับ: กระจายตามตัวอักษรหลังบรรทัดที่ resolved ก่อนหน้า (หรือก่อนบรรทัดถัดไป)
+    chars = _line_chars(ln)
+    dur = min(chars * DEFAULT_CHAR_S, 8.0)
+    if prev is not None:
+        s0 = results[prev].end + 0.2  # type: ignore[union-attr]
+    elif nxt is not None:
+        s0 = results[nxt].start - dur - 0.2  # type: ignore[union-attr]
+    else:
+        s0 = 0.0
+    if nxt is not None:
+        room = results[nxt].start - s0 - 0.1  # type: ignore[union-attr]
+        if room > 0.3:
+            dur = min(dur, room)
+    words = _spread(ln, s0, s0 + dur)
+    return OutLine(words[0][0], words[-1][1], words, False, 0.0)
+
+
+def _spread(line: InLine, start: float, end: float) -> list[tuple[float, float, float]]:
+    """กระจายเวลาให้คำตามจำนวนตัวอักษร"""
+    weights = [max(1, len(norm_chars(w))) for w in line.words] or [1]
+    tot = sum(weights)
+    out: list[tuple[float, float, float]] = []
+    t = start
+    for w in weights:
+        d = (end - start) * w / tot
+        out.append((t, t + d, 0.25))
+        t += d
+    return out
+
+
+def group_words_into_lines(words: list[TWord], max_gap_s: float = 0.7, max_chars: int = 44, max_words: int = 9) -> list[InLine]:
+    """transcript ล้วน -> บรรทัดเนื้อเพลง (ใช้เมื่อไม่เจอเนื้อเพลงที่ไหนเลย หรือโครงสร้างต่างจากเนื้อเพลงสำเร็จรูป)
+    ตัดบรรทัดเมื่อ: เว้นนาน · จบประโยค (. ? ! ที่ Whisper ใส่) · ลูกน้ำเมื่อบรรทัดยาวพอ · ยาวเกิน"""
+    lines: list[InLine] = []
+    cur: list[TWord] = []
+    chars = 0
+
+    def flush() -> None:
+        nonlocal cur, chars
+        if cur:
+            lines.append(InLine(words=[w.text for w in cur], start=cur[0].start, end=cur[-1].end,
+                                word_times=[(w.start, w.end) for w in cur], word_probs=[w.prob for w in cur]))
+        cur, chars = [], 0
+
+    for w in sorted(words, key=lambda x: x.start):
+        if cur and (w.start - cur[-1].end > max_gap_s or chars + len(w.text) > max_chars or len(cur) >= max_words):
+            flush()
+        cur.append(w)
+        chars += len(w.text)
+        t = w.text.rstrip()
+        if t.endswith((".", "?", "!", "。", "？", "！")) or (t.endswith((",", "，", "、")) and len(cur) >= 4):
+            flush()
+    flush()
+    return lines
+
+
+# ---------------------------------------------------------------------------
+# เพลงที่โครงสร้างต่างจากเนื้อเพลงสำเร็จรูป (รีมิกซ์: สลับท่อน/ซ้ำฮุกต่างจำนวน/มีท่อนแร็ปเพิ่ม)
+# ---------------------------------------------------------------------------
+def clean_transcript(words: list[TWord], max_run: int = 3) -> list[TWord]:
+    """ตัดคำที่ Whisper มั่วตอนไม่มีเสียงร้อง: คำเดิมซ้ำติดกันเกิน max_run ("yeah yeah ..." วนเป็นร้อยคำ) และ "คำ" ยาวผิดปกติ"""
+    out: list[TWord] = []
+    prev, run = None, 0
+    for w in words:
+        k = norm_chars(w.text)
+        if not k or len(k) > 25:
+            continue
+        run = run + 1 if k == prev else 1
+        prev = k
+        if run <= max_run:
+            out.append(w)
+    return out
+
+
+@dataclass(slots=True)
+class ReLine:
+    """บรรทัดที่สร้างใหม่ตามลำดับที่ร้องจริง (รีมิกซ์) — src = ดัชนีบรรทัดเนื้อเพลงที่ใช้ข้อความ (None = ข้อความจากที่ AI ฟังได้)"""
+
+    start: float
+    end: float
+    words: list[tuple[float, float, float]]
+    text_words: list[str]
+    src: list[int] | None
+
+
+@dataclass(slots=True)
+class ReResult:
+    lines: list[ReLine]
+    coverage: float          # สัดส่วนตัวอักษรใน transcript ที่ไปตรงกับข้อความเนื้อเพลง (ไม่สนลำดับ)
+
+
+def _best_lyric_span(text: str, lyric_norm: list[str], max_span: int = 3) -> tuple[float, int, int]:
+    """บรรทัดที่ AI ฟังได้ ตรงกับเนื้อเพลงบรรทัดไหน (หรือบรรทัดติดกัน 2-3 บรรทัด) มากสุด คืน (ความคล้าย, เริ่ม, จบ ไม่รวม)"""
+    best = (0.0, 0, 0)
+    n = len(lyric_norm)
+    for i in range(n):
+        joined = ""
+        for j in range(i, min(n, i + max_span)):
+            joined += lyric_norm[j]
+            if not joined:
+                continue
+            sm = SequenceMatcher(None, joined, text, autojunk=False)
+            if sm.real_quick_ratio() < best[0] or sm.quick_ratio() < best[0]:
+                continue
+            r = sm.ratio()
+            if r > best[0]:
+                best = (r, i, j + 1)
+    return best
+
+
+NOSPACE_LANGS = frozenset({"th", "ja", "zh", "yue", "lo", "km", "my"})   # ภาษาที่เขียนไม่เว้นวรรคระหว่างคำ (Whisper ให้ "คำ" เป็นชิ้นย่อยๆ)
+
+
+def _plausible_ai_line(words: list[str], probs: list[float], min_prob: float = 0.55) -> bool:
+    """บรรทัดที่ AI ฟังได้เองน่าเชื่อถือพอจะแสดงไหม: มั่นใจเฉลี่ยพอ · ไม่ใช่คำเดิมวนๆ (เช่น "中 原 中 原 中")"""
+    if not words or sum(probs) / max(1, len(probs)) < min_prob:
+        return False
+    toks = [norm_chars(w) for w in words if norm_chars(w)]
+    return len(toks) < 4 or len(set(toks)) >= max(2, len(toks) // 3)
+
+
+def reconstruct_by_transcript(lines: list[InLine], transcript: list[TWord], min_ratio: float = 0.62, nospace: bool = False) -> ReResult:
+    """สร้างบรรทัดตามลำดับ "ที่ร้องจริง" จาก transcript แล้วแทนข้อความด้วยบรรทัดเนื้อเพลงที่ตรงที่สุด (สะกดถูก) ถ้าคล้ายพอ
+    ใช้เมื่อโครงสร้างเพลงต่างจากเนื้อเพลง (จับคู่แบบเรียงลำดับไม่ได้) — เวลาถูกต้องเสมอเพราะมาจากเสียง"""
+    clean = clean_transcript(transcript)
+    tlines = group_words_into_lines(clean, max_words=30 if nospace else 9, max_chars=36 if nospace else 44)
+    lyric_norm = [norm_chars("".join(ln.words)) for ln in lines]
+    out: list[ReLine] = []
+    covered = total = 0
+    for tl in tlines:
+        tnorm = norm_chars("".join(tl.words))
+        total += len(tnorm)
+        wt = tl.word_times or []
+        probs = tl.word_probs or [0.7] * len(wt)
+        ai_words = [(a, b, p) for (a, b), p in zip(wt, probs)]
+        ai_line = ReLine(tl.start, tl.end, ai_words, list(tl.words), None)
+        if len(tnorm) < 3 or not lines:
+            if _plausible_ai_line(tl.words, probs):
+                out.append(ai_line)
+            continue
+        ratio, i, j = _best_lyric_span(tnorm, lyric_norm)
+        if ratio < min_ratio:
+            if _plausible_ai_line(tl.words, probs):   # ข้อความที่ AI ฟังได้แต่ไม่ตรงเนื้อเพลง: แสดงเฉพาะที่น่าเชื่อถือ (ไม่ใช่เสียงรบกวน/คำมั่ว)
+                out.append(ai_line)
+            continue
+        covered += len(tnorm)
+        twords = [TWord(w, a, b) for w, (a, b) in zip(tl.words, wt)]
+        if j - i > 1:
+            # ช่วงที่ฟังได้ครอบหลายบรรทัดเนื้อเพลง: แยกกลับเป็นบรรทัดเนื้อเพลงเดิมทีละบรรทัด (คงรูปแบบบรรทัดของเนื้อเพลง) ถ้าทุกบรรทัดหาเวลาจากเสียงได้
+            sub = match_lines([InLine(words=lines[k].words) for k in range(i, j)], twords)
+            if all(ol.resolved and ol.words for ol in sub.lines):
+                for k, ol in zip(range(i, j), sub.lines):
+                    out.append(ReLine(ol.words[0][0], ol.words[-1][1], [(a, b, c) for a, b, c in ol.words], list(lines[k].words), [k]))
+                continue
+        lyric_words = [w for k in range(i, j) for w in lines[k].words]
+        sub = match_lines([InLine(words=lyric_words)], twords)
+        ol = sub.lines[0]
+        if ol.resolved:
+            words = ol.words
+        else:  # จับคู่ระดับตัวอักษรไม่ได้ในบรรทัดเดียว: กระจายตามช่วงเวลาของบรรทัดที่ฟังได้
+            words = _spread(InLine(words=lyric_words), tl.start, tl.end)
+        out.append(ReLine(words[0][0], words[-1][1], [(a, b, c) for a, b, c in words], lyric_words, list(range(i, j))))
+    out.sort(key=lambda r: r.start)   # ต้องเรียงตามเวลาเสมอ (UI หาบรรทัดปัจจุบันด้วยการค้นหาแบบแบ่งครึ่ง)
+    return ReResult(lines=out, coverage=covered / total if total else 0.0)
+
+
+def transcript_reliable(words: list[TWord], min_words: int = 40, min_prob: float = 0.55) -> bool:
+    """transcript น่าเชื่อถือพอจะใช้เป็นเนื้อเพลงแทนไหม: คำพอ · มั่นใจเฉลี่ยสูง · ไม่วนซ้ำคำเดียว (hallucination)"""
+    ws = clean_transcript(words)
+    if len(ws) < min_words:
+        return False
+    if sum(w.prob for w in ws) / len(ws) < min_prob:
+        return False
+    distinct = len({norm_chars(w.text) for w in ws})
+    return distinct / len(ws) >= 0.15

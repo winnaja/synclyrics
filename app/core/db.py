@@ -14,6 +14,7 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 # แต่ละรายการ = migration หนึ่งขั้น index+1 = user_version หลังรัน
 MIGRATIONS: list[str | Callable[[sqlite3.Connection], None]] = [
@@ -195,6 +196,18 @@ MIGRATIONS: list[str | Callable[[sqlite3.Connection], None]] = [
         updated_at      REAL NOT NULL
     );
     """,
+    # เฟส 4: ผลของ AI ต่อเพลง (จัดเวลาเนื้อเพลงจากเสียง, คำแปล, ช่วงเสียงร้อง) — เล่นซ้ำแล้วได้ทันทีโดยไม่เรียก AI
+    """
+    CREATE TABLE ai_results (
+        video_id        TEXT NOT NULL,
+        kind            TEXT NOT NULL,      -- 'align' | 'translation:<ภาษา>' | 'vocal'
+        lyrics_key      TEXT NOT NULL DEFAULT '',  -- ระบุชุดเนื้อเพลง (แหล่ง+id+hash) ผลใช้ได้กับชุดนี้เท่านั้น
+        version         INTEGER NOT NULL,   -- เวอร์ชันวิธีคำนวณ (AnalysisCfg.algo_version) ไม่ตรง = ถือว่าหมดอายุ
+        payload         TEXT NOT NULL,      -- JSON
+        created_at      REAL NOT NULL,
+        PRIMARY KEY (video_id, kind, lyrics_key)
+    );
+    """,
 ]
 
 SCHEMA_VERSION = len(MIGRATIONS)
@@ -241,3 +254,51 @@ def _split_sql(script: str) -> list[str]:
     lines = [ln for ln in script.splitlines() if not ln.strip().startswith("--")]
     cleaned = "\n".join(ln.split("--", 1)[0] for ln in lines)
     return [s.strip() for s in cleaned.split(";") if s.strip()]
+
+
+PURGE_KEY = "purge_stale_companion_meta_v1"
+
+
+def purge_stale_companion_cache(conn: sqlite3.Connection) -> bool:
+    """ล้างเนื้อเพลง/ชื่อที่แคชไว้ครั้งเดียว (v1): บั๊กเดิมของส่วนขยายส่ง "videoId ใหม่ + ชื่อเพลงก่อนหน้า" เข้ามา
+
+    แคชตาม videoId จึงอาจจำเนื้อเพลง/ชื่อ/ปกของเพลงผิดไว้ถาวร · ล้าง lyrics, lyrics_choice, ชื่อที่ยืนยันไว้ใน tracks
+    (ค้นใหม่ครั้งต่อไปจากชื่อที่ยืนยันกับ YouTube แล้ว) · offset ที่ผู้ใช้ปรับไว้ (lyrics_offset_s) เก็บไว้
+    คืน True ถ้ามีการล้าง (ครั้งแรกเท่านั้น)
+    """
+    import time
+
+    if conn.execute("SELECT 1 FROM kv WHERE key=?", (PURGE_KEY,)).fetchone():
+        return False
+    conn.execute("DELETE FROM lyrics_choice")
+    conn.execute("DELETE FROM lyrics")
+    conn.execute("UPDATE tracks SET title=NULL, artist=NULL, album=NULL, music_section='{}'")
+    conn.execute("INSERT INTO kv(key, value, updated_at) VALUES(?,?,?)", (PURGE_KEY, "1", time.time()))
+    return True
+
+
+PURGE_ART_KEY = "purge_stale_art_v1"
+
+
+def purge_stale_art_cache(conn: sqlite3.Connection, art_dir: Any) -> int:
+    """ล้างปกที่แคชไว้ครั้งเดียว: บั๊กเดิม (ชื่อเพลงจากหน้าเว็บผิดเพลง) ทำให้ปกถูกค้นด้วยชื่อผิดแล้วจำตาม videoId ถาวร
+    (เช่น เพลง LE SSERAFIM แสดงปก NewJeans) · ลบไฟล์ใน cache/art ทั้งหมด ครั้งต่อไปจะค้นใหม่จากชื่อที่ยืนยันกับ YouTube แล้ว
+    คืนจำนวนไฟล์ที่ลบ (0 = เคยล้างแล้ว/ไม่มีไฟล์)
+    """
+    import time
+    from pathlib import Path
+
+    if conn.execute("SELECT 1 FROM kv WHERE key=?", (PURGE_ART_KEY,)).fetchone():
+        return 0
+    n = 0
+    d = Path(art_dir)
+    if d.is_dir():
+        for f in d.iterdir():
+            if f.is_file():
+                try:
+                    f.unlink()
+                    n += 1
+                except OSError:
+                    pass
+    conn.execute("INSERT INTO kv(key, value, updated_at) VALUES(?,?,?)", (PURGE_ART_KEY, "1", time.time()))
+    return n

@@ -93,3 +93,24 @@ def test_yaml_files_utf8_thai_comments() -> None:
     text = (PROJECT_ROOT / "config" / "automix_rules.yaml").read_text(encoding="utf-8")
     assert "กฎเหล็ก" in text
     yaml.safe_load(text)
+
+
+def test_settings_v1_migration_drops_old_animation_values_but_keeps_user_choices():
+    from app.core.config import migrate_raw
+
+    old = {"version": 1, "overlay": {"anim_speed": 0.85, "glow_strength": 0.6, "font_size": 50, "word_anim": "glow_rise"},
+           "lyrics_look": {"spring_stiffness": 120.0, "font_family": "X"}, "fullwindow": {"blur": 0.6, "w": 1000, "inactive_opacity": 0.5}}
+    new = migrate_raw("settings.yaml", old)
+    assert new["version"] == 3
+    assert new["overlay"] == {"font_size": 50} and new["lyrics_look"] == {"font_family": "X"} and new["fullwindow"] == {"w": 1000}
+    assert old["overlay"]["anim_speed"] == 0.85       # ไม่แก้ข้อมูลต้นฉบับ
+
+
+def test_settings_v2_migration_maps_old_word_animations_to_word_mode():
+    from app.core.config import Settings, migrate_raw
+
+    new = migrate_raw("settings.yaml", {"version": 2, "overlay": {"word_anim": "glow_rise"}})
+    assert new["overlay"]["word_anim"] == "word" and new["overlay"]["lift_px"] > 0 and new["overlay"]["glow_strength"] > 0
+    new = migrate_raw("settings.yaml", {"version": 2, "overlay": {"word_anim": "pop", "word_scale": 1.0}})
+    assert new["overlay"]["word_anim"] == "word" and new["overlay"]["word_scale"] > 1.0
+    assert Settings.model_validate(new).overlay.word_anim == "word"      # ค่าที่แปลงแล้วผ่านการตรวจสอบ

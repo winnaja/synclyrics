@@ -70,7 +70,17 @@ def _setup_core(opts: LaunchOptions) -> Any:
     settings, warnings = load_model(paths, "settings.yaml", Settings)
     for w in warnings:
         log.warning("config", extra={"data": {"warning": w}})
-    dbmod.connect(paths.db_file).close()  # รัน migration ครั้งเดียวก่อนทุก thread
+    if settings.overlay.mode == "full":  # ค่าเก่า: โหมดเต็มตอนนี้เป็นหน้าต่างแยก (fullwindow)
+        settings.overlay.mode = "focus"
+    conn = dbmod.connect(paths.db_file)  # รัน migration ครั้งเดียวก่อนทุก thread
+    try:
+        if dbmod.purge_stale_companion_cache(conn):
+            log.info("ล้างแคชเนื้อเพลง/ชื่อเพลงที่อาจบันทึกผิดจากบั๊กเดิมของส่วนขยาย (ครั้งเดียว)")
+        n_art = dbmod.purge_stale_art_cache(conn, paths.art_cache_dir)
+        if n_art:
+            log.info("ล้างแคชปกที่อาจบันทึกผิดเพลง (ครั้งเดียว)", extra={"data": {"files": n_art}})
+    finally:
+        conn.close()
     bus = EventBus()
     io = IoThread().start()
     return SimpleNamespace(paths=paths, settings=settings, warnings=warnings, bus=bus, io=io, log=log)
@@ -83,7 +93,8 @@ def _start_engine(core: Any) -> Any:
     pb = core.settings.playback
     engine = AudioEngine(EngineConfig(device=pb.output_device, buffer_ms=pb.buffer_ms))
     try:
-        engine.start()
+        # แอปแสดงเนื้อเพลงอย่างเดียว: ไม่เปิดอุปกรณ์เสียงเลย (ไม่แย่งอุปกรณ์/ไม่มีปัญหาเสียงสะดุดของฝั่งแอป)
+        engine.start(open_stream=bool(pb.app_audio))
         core.engine_error = None
     except Exception as e:
         core.log.exception("เปิดอุปกรณ์เสียงไม่ได้")
@@ -107,7 +118,7 @@ def main(argv: list[str] | None = None) -> int:
     log = core.log
     log.info("เริ่มโปรแกรม", extra={"data": {"safe_mode": opts.safe_mode, "args": args}})
 
-    from app.core.events import BRIDGE_MESSAGE, ERROR
+    from app.core.events import ERROR, HEALTH_REPORT
     from app.lyrics import thai
     from app.lyrics.service import LyricsService
     from app.media.youtube import YouTubeClient
@@ -133,29 +144,79 @@ def main(argv: list[str] | None = None) -> int:
     controller.start_background_tasks()
     core.io.loop.call_soon_threadsafe(lambda: core.io.loop.run_in_executor(None, thai.warmup))  # เตรียมตัดคำไทย
 
+    # เฟส 4: AI ฟังเสียงเบื้องหลังเพื่อจัดเวลาเนื้อเพลง (Safe Mode = ไม่เปิด) · ไม่มี torch/GPU = ข้ามเงียบๆ ใช้เวลาแบบประมาณ
+    ai = None
+    if not opts.safe_mode:
+        try:
+            from app.ai.aligner import LyricsAligner
+            from app.ai.client import AiClient
+            from app.ai.translator import LyricsTranslator
+            from app.core.config import ModelsConfig, load_model
+
+            models_cfg, mwarn = load_model(core.paths, "models.yaml", ModelsConfig)
+            for w in mwarn:
+                log.warning("config", extra={"data": {"warning": w}})
+            mdict = models_cfg.model_dump()
+            ai = AiClient(mdict, core.paths.stems_cache_dir)
+            controller.ai = ai
+            controller.aligner = LyricsAligner(ai, core.bus, core.paths.db_file, core.paths, media, mdict,
+                                               position_fn=lambda: controller.remote_clock.position(),
+                                               on_mismatch=controller.on_align_mismatch)
+            controller.translator = LyricsTranslator(ai, core.bus, core.paths.db_file, mdict)
+            from app.core.events import LYRICS_RETIMED
+
+            core.bus.subscribe(LYRICS_RETIMED, controller.on_lyrics_retimed)
+            if core.settings.ai.enabled:   # ปิดไว้ในตั้งค่า = ไม่เปิด worker/ไม่กิน VRAM (เปิดทีหลังได้ controller จะเปิดให้เมื่อมีงาน)
+                core.io.loop.call_soon_threadsafe(lambda: core.io.loop.run_in_executor(None, ai.start))  # เปิด worker ใน thread ไม่บล็อก UI
+        except Exception:
+            log.exception("เตรียม AI ไม่สำเร็จ (ใช้เวลาแบบประมาณแทน)")
+
     bridge = BridgeServer(core.bus)
     window: dict[str, Any] = {}
 
-    def on_bridge(topic: str, p: dict[str, Any]) -> None:
-        """ข้อความจากส่วนขยาย/ตัวเปิดซ้ำ (เฟส 1: focus + ลิงก์จาก argv; เฟส 2 เพิ่มชนิดอื่น)"""
-        if p.get("type") == "command" and p.get("payload", {}).get("name") == "focus":
-            for a in p["payload"].get("argv", []):
-                if not a.startswith("-"):
-                    controller.play_url(a)
-            raise_window = window.get("raise")
-            if raise_window:
-                raise_window()
+    from app.bridge.service import BridgeService, load_selectors
 
-    core.bus.subscribe(BRIDGE_MESSAGE, on_bridge)
+    service = BridgeService(
+        core.bus, controller, bridge.send,
+        selectors_loader=lambda: load_selectors(core.paths.user_config_dir, core.paths.default_config_dir),
+        raise_window=lambda: (window.get("raise") or (lambda: None))(), settings=core.settings,
+        show_settings=lambda: (window.get("settings") or (lambda: None))())
 
-    def on_started(raise_window: Any) -> None:
+    def install_extension() -> str:
+        """ปุ่มติดตั้งส่วนขยายใน UI (UI thread): คัดลอก + ลงทะเบียน host + clipboard + เปิด chrome://extensions"""
+        from PySide6.QtGui import QGuiApplication
+
+        from app.bridge import installer
+
+        res = installer.install(core.paths, set_clipboard=lambda t: QGuiApplication.clipboard().setText(t))
+        if res.ok and res.changed:
+            bridge.send("reload_extension", {})  # ส่วนขยายที่ติดตั้งอยู่แล้ว ให้โหลดไฟล์ใหม่
+        return res.message
+
+    def run_health() -> None:
+        """ตรวจสุขภาพใน IO thread (ไม่บล็อก UI) แล้วส่งผลเข้า bus"""
+        from app.audio.decoder import find_ffmpeg
+        from app.bridge import registry
+        from app.core import health
+
+        items = health.run_health_checks(find_ffmpeg=find_ffmpeg, cookies_file=core.paths.cookies_file,
+                                         is_ext_registered=registry.is_registered, engine_error=core.engine_error,
+                                         app_audio=core.settings.playback.app_audio)
+        text = health.format_problems(items)
+        if text:
+            log.warning("ตรวจสุขภาพ: มีปัญหา", extra={"data": {"problems": [i.id for i in items if not i.ok]}})
+        core.bus.publish(HEALTH_REPORT, {"items": items, "text": text})
+
+    def on_started(raise_window: Any, show_settings: Any = None) -> None:
         """เรียกใน UI thread หลัง QML โหลดแล้ว: เปิด named pipe + แจ้ง error ที่ค้าง + กู้สถานะ"""
         window["raise"] = raise_window
+        window["settings"] = show_settings
         if not bridge.start():
             log.error("เปิด bridge ไม่สำเร็จ (ส่วนขยายจะต่อไม่ได้ แต่โปรแกรมเล่นเพลงได้ปกติ)")
         if core.engine_error:
             core.bus.publish(ERROR, {"module": "audio", "message": core.engine_error,
                                      "user_message": core.engine_error, "recoverable": False})
+        core.io.loop.call_soon_threadsafe(lambda: core.io.loop.run_in_executor(None, run_health))
         if opts.open_url:
             controller.play_url(opts.open_url)
         else:
@@ -165,6 +226,11 @@ def main(argv: list[str] | None = None) -> int:
 
     def shutdown() -> None:
         controller.shutdown()
+        if ai is not None:
+            try:
+                ai.stop()
+            except Exception:
+                log.exception("ปิด AI worker ไม่สำเร็จ")
         try:
             bridge.stop()
         except Exception:
@@ -172,8 +238,19 @@ def main(argv: list[str] | None = None) -> int:
         engine.stop()
         core.io.stop()
 
+    from app.core.config import save_settings
+
+    def quit_app() -> None:
+        from PySide6.QtGui import QGuiApplication
+
+        QGuiApplication.quit()
+
     ctx = UiContext(bus=core.bus, get_clock=controller.get_clock, controller=controller,
-                    settings=core.settings, shutdown=shutdown, on_started=on_started)
+                    settings=core.settings, shutdown=shutdown, on_started=on_started,
+                    actions={"install_extension": install_extension,
+                             "reconnect_youtube": lambda: bridge.send("reload_extension", {})},
+                    save_settings=lambda: save_settings(core.paths, core.settings), data_dir=str(core.paths.home),
+                    quit_app=quit_app, global_hotkeys=not opts.safe_mode)
     try:
         return run_ui(ctx, safe_mode=opts.safe_mode)
     except Exception:

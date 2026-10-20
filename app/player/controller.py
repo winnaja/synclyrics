@@ -29,14 +29,17 @@ from app.core import db as dbmod
 from app.core import events as ev
 from app.core.errors import MediaError, SyncLyricsError
 from app.core.log import get_logger
+from app.core.clock import RemoteClock
 from app.core.models import TrackRef
 from app.media import cache as audio_cache
+from app.player.queue import PlayQueue
 from app.player.state import SAVE_INTERVAL_S, save_state
 
 log = get_logger("player")
 # PCM ที่ต้องมีก่อนเริ่มเล่น (วินาที) — decoder เร็วกว่าเล่นจริงหลายสิบเท่า จึงเริ่มได้เกือบทันที
 START_BUFFER_S = 2.0
 START_TIMEOUT_S = 15.0
+INFO_WAIT_S = 3.0  # โหมดคู่หู: รอ yt-dlp หลังได้ oEmbed แล้วไม่เกินนี้
 EVENT_POLL_S = 0.5
 
 
@@ -73,10 +76,27 @@ class PlayerController:
         self.playing = False
         self.lyrics_offset = 0.0
         self._ticker: concurrent.futures.Future[Any] | None = None
+        # เฟส 2: คิว + โหมด (app = โปรแกรมเล่นเสียงเอง, companion = เล่นใน YouTube แล้วโปรแกรมแค่แสดงเนื้อเพลง)
+        self.queue = PlayQueue()
+        # app_audio=False (ค่าเริ่มต้น): แอปแสดงเนื้อเพลงอย่างเดียว ตามเพลงที่เล่นใน YouTube (โหมดคู่หูโหมดเดียว)
+        self.mode = "app" if self._app_audio() else "companion"
+        self.remote_clock = RemoteClock()
+        self.volume = 1.0   # วอลลุ่มของวิดีโอในแท็บ YouTube (โหมดคู่หู) 0-1
+        self.muted = False
+        # ผู้ให้บริการควบคุมแท็บ YouTube ในโหมดคู่หู: tab_control(action, data) — BridgeService เป็นคนตั้ง
+        self.tab_control: Any = None
+        # เฟส 4: ตัวจัดเวลาเนื้อเพลงจากเสียงด้วย AI (LyricsAligner) — main ตั้งให้ · None = ไม่มี AI (ใช้เวลาแบบประมาณ/ของแหล่งล้วน)
+        self.aligner: Any = None
+        self.translator: Any = None   # LyricsTranslator (แปลไทยทั้งเพลงด้วย AI) · None = ไม่แปล
+        self._mismatch_tries: dict[str, int] = {}
 
     # ------------------------------------------------------------------
     # ตัวช่วย
     # ------------------------------------------------------------------
+    def _app_audio(self) -> bool:
+        """เปิดโหมดแอปเล่นเสียงเองไหม (ปิดอยู่เป็นค่าเริ่มต้น — ดู PlaybackSettings.app_audio)"""
+        return bool(getattr(getattr(self.settings, "playback", None), "app_audio", False))
+
     def _conn(self) -> Any:
         conn = getattr(self._local, "conn", None)
         if conn is None:
@@ -85,7 +105,9 @@ class PlayerController:
         return conn
 
     def get_clock(self) -> Any:
-        """นาฬิกาของ deck ที่กำลังเล่น — UI เรียกทุกเฟรม"""
+        """นาฬิกาของเพลงที่แสดงอยู่ — UI เรียกทุกเฟรม (โหมดคู่หู = นาฬิกาจากส่วนขยาย)"""
+        if self.mode == "companion":
+            return self.remote_clock
         return self.engine.clocks[self.active_deck]
 
     def _status(self, text: str) -> None:
@@ -108,11 +130,60 @@ class PlayerController:
         """วางลิงก์ YouTube (Ctrl+V / ช่องกรอก) แล้วเล่น"""
         from app.media.youtube import parse_video_id
 
+        if not self._app_audio():
+            self._status("โปรแกรมนี้แสดงเนื้อเพลงอย่างเดียว — เล่นเพลงใน YouTube แล้วเนื้อเพลงจะขึ้นเอง")
+            return
         vid = parse_video_id(text)
         if not vid:
             self._error(MediaError("player", "ลิงก์นี้ไม่ใช่ลิงก์ YouTube", hint="วางลิงก์วิดีโอหรือ videoId"))
             return
-        self.play(TrackRef(video_id=vid, added_from="paste"))
+        self.play_now(TrackRef(video_id=vid, added_from="paste"))
+
+    def play_now(self, track: TrackRef, start_at: float = 0.0) -> None:
+        """"เล่นเลย" จากส่วนขยาย/ลิงก์: เข้าโหมดแอป ใส่เพลงเป็นเพลงปัจจุบันของคิว แล้วเล่น (ปิดเมื่อ app_audio=False)"""
+        if not self._app_audio():
+            log.info("ข้าม play_now: แอปไม่เล่นเสียงเอง", extra={"data": {"video_id": track.video_id}})
+            return
+        self.set_mode("app")
+        self.queue.play_now(track)
+        self._publish_queue()
+        self.play(track, start_at=start_at)
+
+    def enqueue(self, tracks: list[TrackRef], position: str = "end") -> int:
+        """"เข้าคิว": เพิ่มท้ายคิว (หรือถัดไป) ไม่ขัดเพลงที่เล่นอยู่ — ถ้ายังไม่มีเพลงเลยเริ่มเล่นเพลงแรก"""
+        if not self._app_audio():
+            return 0
+        n = self.queue.add(tracks, position)
+        self._publish_queue()
+        if n and self.track is None and self.mode == "app":
+            first = self.queue.current() or self.queue.next()
+            if first is not None:
+                self._publish_queue()
+                self.play(first)
+        return n
+
+    def _publish_queue(self) -> None:
+        snap = self.queue.snapshot()
+        self.bus.publish(ev.QUEUE_CHANGED, {"items": snap["items"], "index": snap["index"]})
+
+    def set_mode(self, mode: str) -> None:
+        """สลับ app/companion · เข้า companion: หยุดเสียงของแอป (YouTube เป็นคนเล่นแทน)"""
+        if mode not in ("app", "companion") or mode == self.mode:
+            return
+        if mode == "app" and not self._app_audio():
+            return
+        with self._lock:
+            if mode == "companion":
+                self._token += 1
+                self._cancel_current()
+                if self.loaded and self.playing:
+                    self.engine.pause(self.active_deck)
+                self.playing = False
+                self.loaded = False
+                self.track = None
+            self.mode = mode
+        self.bus.publish(ev.MODE_CHANGED, {"mode": mode})
+        self._publish_playback()
 
     def play(self, track: TrackRef, start_at: float = 0.0, autoplay: bool = True) -> None:
         """เริ่มเล่นเพลงใหม่ (ยกเลิกงานของเพลงก่อนหน้า)"""
@@ -148,7 +219,18 @@ class PlayerController:
                 log.exception("ยกเลิก decoder ไม่สำเร็จ")
             self._decoder = None
 
+    def _tab(self, action: str, **data: Any) -> None:
+        """สั่งแท็บ YouTube ในโหมดคู่หู (play/pause/seek) ผ่านส่วนขยาย"""
+        if self.tab_control is not None:
+            try:
+                self.tab_control(action, data)
+            except Exception:
+                log.exception("สั่งแท็บ YouTube ไม่สำเร็จ")
+
     def toggle_pause(self) -> None:
+        if self.mode == "companion":
+            self._tab("pause" if self.playing else "play")
+            return
         if not self.loaded:
             return
         if self.playing:
@@ -159,13 +241,36 @@ class PlayerController:
         self._publish_playback()
 
     def seek(self, position_s: float) -> None:
+        if self.mode == "companion":
+            self._tab("seek", time=max(0.0, float(position_s)))
+            return
         if not self.loaded:
             return
         top = self.duration if self.duration > 0 else position_s
         self.engine.seek(self.active_deck, max(0.0, min(position_s, max(top - 0.05, 0.0))))
 
     def set_volume(self, volume: float) -> None:
-        self.engine.set_master_volume(max(0.0, min(1.0, float(volume))))
+        """ปรับวอลลุ่ม: โหมดคู่หู = สั่งตัวเล่นใน YouTube (แอปไม่เล่นเสียงเอง) · โหมดแอปเดิม = engine"""
+        v = max(0.0, min(1.0, float(volume)))
+        if self.mode == "companion":
+            self._tab("volume", value=v)
+            self._set_volume(v, self.muted and v <= 0.0)  # ลากวอลลุ่มขึ้น = เลิกปิดเสียง (ส่วนขยายทำเหมือนกัน)
+            return
+        self.engine.set_master_volume(v)
+
+    def toggle_mute(self) -> None:
+        """ปุ่มลำโพง: ปิด/เปิดเสียงของตัวเล่นใน YouTube"""
+        if self.mode != "companion":
+            return
+        target = not self.muted
+        self._tab("mute", value=target)
+        self._set_volume(self.volume, target)
+
+    def _set_volume(self, volume: float, muted: bool) -> None:
+        if abs(volume - self.volume) < 1e-3 and muted == self.muted:
+            return
+        self.volume, self.muted = volume, muted
+        self.bus.publish(ev.VOLUME_CHANGED, {"volume": volume, "muted": muted})
 
     def adjust_offset(self, delta_s: float) -> None:
         """[ / ] ปรับ offset เนื้อเพลงทีละ 0.1 วิ (บวก = เนื้อเพลงช้าลง) จำตาม videoId"""
@@ -196,7 +301,165 @@ class PlayerController:
         self.io.submit(run())
 
     def skip_next(self) -> None:
-        raise NotImplementedError("เฟส 5")
+        """เพลงถัดไปในคิว (ไม่มี = ไม่ทำอะไร แค่แจ้งสถานะ) · โหมดคู่หู: ให้ YouTube ข้ามเอง"""
+        if self.mode == "companion":
+            self._tab("next")
+            return
+        nxt = self.queue.next()
+        if nxt is None:
+            self._status("ไม่มีเพลงถัดไปในคิว")
+            return
+        self._publish_queue()
+        self.play(nxt)
+
+    def skip_prev(self) -> None:
+        """กดครั้งแรกเมื่อเล่นเกิน 3 วิ = กลับต้นเพลง · ไม่งั้นย้อนไปเพลงก่อนหน้าในคิว"""
+        if self.mode == "companion":
+            self._tab("prev")
+            return
+        try:
+            pos = float(self.get_clock().position())
+        except Exception:
+            pos = 0.0
+        prev = self.queue.prev() if pos <= 3.0 else None
+        if prev is None:
+            if self.loaded:
+                self.seek(0.0)
+            return
+        self._publish_queue()
+        self.play(prev)
+
+    # ------------------------------------------------------------------
+    # โหมดคู่หู (ข้อ 2.2): YouTube เล่น โปรแกรมแสดงเนื้อเพลงตามเวลาที่ส่วนขยายส่งมา
+    # ------------------------------------------------------------------
+    def companion_track(self, track: TrackRef) -> None:
+        """เพลงในแท็บ YouTube เปลี่ยน: หาเนื้อเพลง/ปกให้เพลงนั้น (ไม่โหลดเสียง ไม่มี AI)"""
+        self.set_mode("companion")
+        with self._lock:
+            if self.track is not None and self.track.video_id == track.video_id:
+                return
+            self._token += 1
+            token = self._token
+            self._cancel_current()
+            if self.aligner is not None and self.track is not None:
+                self.aligner.cancel(self.track.video_id)   # เพลงเปลี่ยน: เลิกฟังเสียงของเพลงเก่า
+                if self.translator is not None:
+                    self.translator.cancel(self.track.video_id)
+            # ชื่อ/ช่อง/Music section ที่ส่วนขยายส่งมาเป็นแค่ "คำใบ้" (อ่านจากหน้าเว็บ อาจเป็นของเพลงก่อนหน้าตอนเปลี่ยนเพลง)
+            # จึงไม่แสดง/ไม่ใช้ค้นหา จนกว่าจะยืนยันกับ YouTube จาก videoId (oEmbed + yt-dlp) — ดู _companion_async
+            self.track = TrackRef(video_id=track.video_id, added_from="companion")
+            self.duration = 0.0
+            self.lyrics_offset = 0.0
+            self.playing = False
+            self.remote_clock = RemoteClock()  # เพลงใหม่ = นาฬิกาใหม่ (ไม่ค้างเวลาของเพลงก่อน)
+            self._future = self.io.submit(self._companion_async(track, token))
+
+    @staticmethod
+    def _same_title(a: str, b: str) -> bool:
+        """ชื่อสองอันเป็นวิดีโอเดียวกันไหม (ไม่สนตัวพิมพ์/เว้นวรรค/เครื่องหมาย; อันหนึ่งเป็นส่วนของอีกอันก็ได้)"""
+        import re
+
+        na, nb = (re.sub(r"[\W_]+", "", x.casefold()) for x in (a or "", b or ""))
+        return bool(na and nb and (na == nb or na in nb or nb in na))
+
+    async def _resolve_companion_track(self, hint: TrackRef) -> tuple[TrackRef | None, Any]:
+        """ข้อมูลเพลงที่ยืนยันแล้วจาก videoId: oEmbed (เร็ว) + yt-dlp (ละเอียด: track/artist/album/คำบรรยาย)
+
+        คืน (TrackRef, VideoInfo|None) หรือ (None, None) ถ้าดึงอะไรไม่ได้เลย
+        Music section ที่ส่วนขยายส่งมาใช้ก็ต่อเมื่อชื่อวิดีโอบนหน้าเว็บตรงกับชื่อที่ยืนยันแล้วเท่านั้น
+        """
+        from app.media.youtube import fetch_oembed
+
+        vid = hint.video_id
+        fetch_info = getattr(self.media, "fetch_info", None)
+        vi_task = asyncio.ensure_future(asyncio.to_thread(fetch_info, vid)) if fetch_info else None
+        oembed = await fetch_oembed(vid)
+        vi = None
+        if vi_task is not None:
+            try:  # yt-dlp ช้ากว่า oEmbed — รอเพิ่มไม่เกิน INFO_WAIT_S ไม่ทันก็ไปต่อด้วยข้อมูลที่มี (เนื้อเพลงไม่ควรรอนาน)
+                vi = await asyncio.wait_for(asyncio.shield(vi_task), INFO_WAIT_S)
+            except Exception:  # noqa: BLE001 — หมดเวลา/พัง = ไม่มีข้อมูลละเอียด
+                vi = None
+                vi_task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
+        if vi is not None:
+            track = TrackRef(**vi.track.to_dict())
+        elif oembed is not None:
+            track = TrackRef(video_id=vid, title=oembed[0], channel=oembed[1])
+        else:
+            return None, None
+        track.added_from = "companion"
+        if hint.music_section and self._same_title(hint.title, track.title):
+            track.music_section = dict(hint.music_section)
+        return track, vi
+
+    async def _companion_async(self, hint: TrackRef, token: int) -> None:
+        vid = hint.video_id
+        alive = lambda: token == self._token  # noqa: E731
+        try:
+            # ล้างเพลงเก่าออกจากหน้าจอทันที (ไม่ให้ชื่อ/ปก/เนื้อเพลงของเพลงก่อนหน้าค้างปนกับเพลงใหม่)
+            self.bus.publish(ev.TRACK_CHANGED, {"video_id": vid, "track_ref": TrackRef(video_id=vid), "deck": -1})
+            self._status("กำลังหาข้อมูลเพลง...")
+            track, vi = await self._resolve_companion_track(hint)
+            if not alive():
+                return
+            if track is None:
+                self._status("")
+                self._error(MediaError("media", "ดึงข้อมูลเพลงจาก YouTube ไม่ได้", hint="ตรวจอินเทอร์เน็ต หรือวิดีโอนี้อาจไม่เปิดเผย"))
+                return
+            track = await asyncio.to_thread(self._track_from_db, track)
+            with self._lock:
+                if not alive():
+                    return
+                self.track = track
+                self.duration = float(vi.duration) if vi is not None and vi.duration else (track.duration or self.duration)
+            self._status("")
+            # แสดงชื่อ/ศิลปินทันทีที่ยืนยันแล้ว (ไม่รอผลค้นเนื้อเพลง) — ปกตามมาทีหลังใน _artwork_flow
+            from app.lyrics.title_parser import parse_track
+
+            self.bus.publish(ev.TRACK_META_READY, {"video_id": vid, "meta": parse_track(track), "cover_path": None,
+                                                   "palette": []})
+            await asyncio.to_thread(self._ensure_track, track)
+            if vi is not None and getattr(vi, "is_live", False):
+                # ถ่ายทอดสด: ไม่มีเนื้อเพลงให้ค้น (UX UI ข้อ 7.1 Unsupported Video) แต่ยังหาปกให้
+                self.bus.publish(ev.LYRICS_READY, {"video_id": vid, "lyrics": None, "source_label": "", "candidates_count": 0,
+                                                   "final": True, "unsupported": "ถ่ายทอดสด"})
+                await self._artwork_flow(track, parse_track(track), token)
+                return
+            await self._side_tasks(track, vi, token)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            if alive():
+                self._status("")
+                self._error(e)
+
+    def companion_state(self, d: dict[str, Any]) -> None:
+        """รับเวลาเล่นจากแท็บ YouTube (ส่งถี่ๆ) -> นาฬิกาของ UI"""
+        if self.mode != "companion":
+            return
+        vid = d.get("video_id")
+        if self.track is None or vid != self.track.video_id:
+            # ข้อความ companion_track หาย/มาช้า: จับเพลงใหม่จากเวลาที่ส่งมาเลย (ข้อมูลเพลงดึงจาก videoId เองอยู่แล้ว)
+            if isinstance(vid, str) and len(vid) == 11:
+                self.companion_track(TrackRef(video_id=vid, added_from="companion"))
+            else:
+                return
+        try:
+            self.remote_clock.update(float(d.get("current_time", 0.0)), float(d.get("sent_at_ms", 0.0)),
+                                     float(d.get("rate", 1.0)) or 1.0, bool(d.get("paused", True)),
+                                     bool(d.get("seeked", False)))
+            dur = d.get("duration")
+            if isinstance(dur, (int, float)) and dur > 0:
+                self.duration = float(dur)
+            vol = d.get("volume")
+            if isinstance(vol, (int, float)) and 0 <= vol <= 1:
+                self._set_volume(float(vol), bool(d.get("muted", False)))
+            playing = not bool(d.get("paused", True))
+            if playing != self.playing:
+                self.playing = playing
+                self._publish_playback()
+        except (TypeError, ValueError):
+            log.warning("companion_state ผิดรูปแบบ")
 
     def skip_mix(self) -> None:
         """ปุ่ม "ข้ามการมิกซ์": ตัดไปเพลง B ทันทีแบบสั้น (รางวัล -0.8)"""
@@ -208,10 +471,17 @@ class PlayerController:
     def restore(self, state: dict[str, Any]) -> bool:
         """เปิดโปรแกรมใหม่: กลับไปเพลงเดิมตำแหน่งเดิม (หยุดไว้ ยังไม่เล่นจนกว่าผู้ใช้กด)"""
         try:
+            if isinstance(state.get("queue"), dict):
+                self.queue.restore(state["queue"])
+                self._publish_queue()
             ref = state.get("track_ref")
             if not ref:
                 return False
             track = TrackRef(**{k: v for k, v in ref.items() if k in TrackRef.__dataclass_fields__})
+            if not self._app_audio() or state.get("mode") == "companion":
+                # ไม่มีเสียงให้กู้ — แสดงเพลงล่าสุดแบบหยุดไว้ (ส่วนขยายจะส่งเพลงที่เล่นอยู่จริงมาแทนเมื่อเชื่อมต่อ)
+                self.companion_track(track)
+                return True
             self.play(track, start_at=float(state.get("position_s") or 0.0), autoplay=False)
             return True
         except Exception:
@@ -227,7 +497,8 @@ class PlayerController:
         return {
             "video_id": self.track.video_id if self.track else None,
             "track_ref": self.track.to_dict() if self.track else None,
-            "position_s": round(pos, 2), "playing": self.playing, "mode": "app",
+            "position_s": round(pos, 2), "playing": self.playing, "mode": self.mode,
+            "queue": self.queue.snapshot(),
         }
 
     def start_background_tasks(self) -> None:
@@ -243,6 +514,8 @@ class PlayerController:
                 if self.loaded and self.playing and self.engine.decks[self.active_deck].state == DeckState.ENDED:
                     self.playing = False
                     self._publish_playback()
+                    if self.queue.has_next():  # เพลงจบ -> เพลงถัดไปในคิว (AutoMix/ต่อเนื่องจริงจังเป็นเฟส 5-6)
+                        self.skip_next()
                 now = time.monotonic()
                 if self.paths is not None and now - last_save >= SAVE_INTERVAL_S and self.track is not None:
                     last_save = now
@@ -278,6 +551,51 @@ class PlayerController:
             "candidates_count": len(res.candidates), "final": getattr(res, "final", True),
             "needs_ai_transcription": getattr(res, "needs_ai_transcription", False),
         })
+        self._align_hook(video_id, res)
+
+    def _align_hook(self, video_id: str, res: Any) -> None:
+        """เนื้อเพลงสุดท้ายของเพลงนี้พร้อมแล้ว -> ให้ AI ฟังเสียงจัดเวลาจริง (หรือถอดเสียงถ้าไม่พบเนื้อเพลงเลย) ไม่บล็อกอะไร"""
+        ai_cfg = getattr(self.settings, "ai", None)
+        if self.aligner is None or self.io is None or not getattr(res, "final", True) or not getattr(ai_cfg, "enabled", True):
+            return
+        chosen = res.chosen
+        if chosen is None and not getattr(getattr(self.settings, "lyrics_sources", None), "allow_ai_transcribe", True):
+            return
+        if chosen is not None and not chosen.lines:
+            return
+        try:
+            ai = self.ai
+            if ai is not None and not getattr(ai, "started", True):   # ผู้ใช้เพิ่งเปิด AI ในตั้งค่า (หรือยังไม่เคยเปิด): เปิด worker ตอนนี้
+                self.io.loop.run_in_executor(None, ai.start)
+            self.io.submit(self.aligner.start(video_id, chosen, res.source_label, self.duration or None))
+            if self.translator is not None and chosen is not None and getattr(ai_cfg, "translate", True):
+                self.io.submit(self.translator.start(video_id, chosen))
+        except Exception:
+            log.exception("ส่งงานจัดเวลาด้วย AI ไม่สำเร็จ")
+
+    def on_lyrics_retimed(self, topic: str, p: dict[str, Any]) -> None:
+        """AI สร้างเนื้อเพลงชุดใหม่ที่บรรทัดต่างจากเดิม (รีมิกซ์/ถอดเสียง): คำแปลของชุดเดิมใช้ไม่ได้ ให้แปลชุดใหม่"""
+        if not p.get("restructured") or not p.get("final") or self.translator is None or self.io is None:
+            return
+        if not getattr(getattr(self.settings, "ai", None), "translate", True):
+            return
+        if self.track is None or self.track.video_id != p.get("video_id"):
+            return
+        try:
+            self.io.submit(self.translator.start(p["video_id"], p["lyrics"]))
+        except Exception:
+            log.exception("ส่งงานแปลเนื้อเพลงชุดใหม่ไม่สำเร็จ")
+
+    def on_align_mismatch(self, video_id: str) -> None:
+        """AI ฟังแล้วเนื้อเพลงนี้เป็นคนละเวอร์ชันกับเสียง: ลองเนื้อเพลงอันดับถัดไป (ไม่เกิน 3 ครั้งต่อเพลง กันวนไม่รู้จบ)"""
+        if self.track is None or self.track.video_id != video_id:
+            return
+        n = self._mismatch_tries.get(video_id, 0)
+        if n >= 3:
+            return
+        self._mismatch_tries[video_id] = n + 1
+        log.info("เนื้อเพลงไม่ตรงเสียง ลองตัวถัดไป", extra={"data": {"video_id": video_id, "try": n + 1}})
+        self.next_lyrics_candidate()
 
     def _audio_dir(self) -> Path:
         return self.paths.audio_cache_dir
@@ -465,8 +783,60 @@ class PlayerController:
         except Exception as e:
             log.error("งานเสริมพัง", extra={"data": {"err": repr(e)}})
 
+    def reset_offset(self) -> None:
+        """รีเซ็ต offset เนื้อเพลงของเพลงนี้เป็น 0"""
+        if self.track is not None and self.lyrics_offset:
+            self.adjust_offset(-self.lyrics_offset)
+
+    def search_lyrics(self, query: str) -> None:
+        """ค้นเนื้อเพลงเอง: ล้างแคชของเพลงนี้แล้วค้นด้วยข้อความที่ผู้ใช้พิมพ์ ("ศิลปิน - ชื่อเพลง") แทนชื่อจาก YouTube"""
+        if self.track is None or not query.strip():
+            return
+        base, token = self.track, self._token
+        manual = TrackRef(video_id=base.video_id, title=query.strip(), channel="", duration=base.duration or self.duration or None,
+                          added_from="manual")
+
+        def purge() -> None:
+            conn = self._conn()
+            conn.execute("DELETE FROM lyrics_choice WHERE video_id=?", (base.video_id,))
+            conn.execute("DELETE FROM lyrics WHERE video_id=?", (base.video_id,))
+
+        async def run() -> None:
+            try:
+                await asyncio.to_thread(purge)
+                await self._lyrics_flow(manual, None, token)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                self._error(e, "lyrics")
+
+        self.io.submit(run())
+
+    def refresh_lyrics(self) -> None:
+        """โหลดเนื้อเพลงใหม่: ล้างแคชของเพลงนี้แล้วค้นทุกแหล่งอีกรอบ (ปุ่ม "โหลดใหม่")"""
+        if self.track is None:
+            return
+        track, token = self.track, self._token
+
+        def purge() -> None:
+            conn = self._conn()
+            conn.execute("DELETE FROM lyrics_choice WHERE video_id=?", (track.video_id,))
+            conn.execute("DELETE FROM lyrics WHERE video_id=?", (track.video_id,))
+
+        async def run() -> None:
+            try:
+                await asyncio.to_thread(purge)
+                await self._lyrics_flow(track, None, token)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                self._error(e, "lyrics")
+
+        self.io.submit(run())
+
     async def _lyrics_flow(self, track: TrackRef, info: Any, token: int) -> Any:
         vid = track.video_id
+        self.bus.publish(ev.LYRICS_LOADING, {"video_id": vid})
         self.lyrics_offset = await asyncio.to_thread(self._load_offset, vid)
         self.bus.publish(ev.LYRICS_OFFSET, {"video_id": vid, "offset": self.lyrics_offset})
         extras = {"subtitles": info.subtitles} if info is not None else {}

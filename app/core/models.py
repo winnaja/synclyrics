@@ -50,6 +50,8 @@ class Word:
     timing: WordTimingSource = WordTimingSource.SOURCE
     # ช่องว่างหลังคำนี้ไหม (ภาษาไทยมักไม่มี ภาษาอังกฤษมี)
     trailing_space: bool = False
+    # คำเน้นแบบ Apple Music (เรืองแสง+ขยายตอนร้อง): AI ระบุ (เช่น คำท้ายบรรทัดที่ลากเสียง) · คำที่ยาวเกินค่าตั้งถูกเน้นโดย UI อยู่แล้ว
+    emphasis: bool = False
 
     @property
     def duration(self) -> float:
@@ -100,6 +102,7 @@ class Lyrics:
                         confidence=w.get("confidence", 1.0),
                         timing=WordTimingSource(w.get("timing", "source")),
                         trailing_space=w.get("trailing_space", False),
+                        emphasis=w.get("emphasis", False),
                     )
                     for w in ln["words"]
                 ],

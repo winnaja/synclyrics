@@ -25,6 +25,8 @@ TRACK_META_READY = "track.meta_ready"        # {video_id, meta, cover_path, pale
 PLAYBACK_STATE = "playback.state"            # {playing, video_id}
 LYRICS_READY = "lyrics.ready"                # {video_id, lyrics, source_label, candidates_count}
 LYRICS_TIMING_UPDATED = "lyrics.timing"      # {video_id, start, end, words}  อัปเกรดเวลาทีละช่วง
+LYRICS_RETIMED = "lyrics.retimed"            # {video_id, lyrics, source_label, final, coverage, gaps}  AI จัดเวลาใหม่จากเสียง (แทนเวลาของเนื้อเพลงทั้งชุดโดยไม่รีเซ็ตการเลื่อน)
+TRANSLATION_READY = "lyrics.translation"     # {video_id, translations: [str], lang}  คำแปลทั้งเพลงจาก AI (ทีละบรรทัด ว่าง = ไม่มี)
 ALIGN_COVERAGE = "lyrics.coverage"           # {video_id, ranges: [[start,end],...]}  แถบบน progress bar
 ANALYSIS_READY = "analysis.ready"            # {video_id, analysis}
 QUEUE_CHANGED = "queue.changed"              # {items, index}
@@ -36,8 +38,12 @@ RATING_REQUEST = "mix.rating_request"        # {mix_id, cover_a, cover_b}
 AI_STATUS = "ai.status"                      # {state, vram_used_mb, queue}
 BRIDGE_STATUS = "bridge.status"              # {connected, ext_version}
 BRIDGE_MESSAGE = "bridge.message"            # {type, payload, id, client}  ข้อความดิบจากส่วนขยาย/ตัวเปิดซ้ำ
+LYRICS_LOADING = "lyrics.loading"            # {video_id}  เริ่มค้นหาเนื้อเพลง (UI แสดง "กำลังค้นหา..." ไม่ใช่ "ไม่พบ")
 LYRICS_OFFSET = "lyrics.offset"              # {video_id, offset}  offset เนื้อเพลง (วินาที) ของเพลงที่เล่นอยู่
 PLAYER_STATUS = "player.status"              # {text}  ข้อความสถานะสั้นๆ ให้ผู้ใช้ เช่น "กำลังโหลดเสียง..."
+HEALTH_REPORT = "health.report"              # {items: [HealthItem], text}  ผลตรวจสุขภาพตอนเปิด
+VOLUME_CHANGED = "volume.changed"            # {volume 0-1, muted}  วอลลุ่มของเพลงในแท็บ YouTube (โหมดคู่หู)
+MODE_CHANGED = "mode.changed"                # {mode: "app"|"companion"}
 ERROR = "error"                              # {module, message, user_message, recoverable}
 
 

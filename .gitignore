@@ -39,3 +39,9 @@ venv/
 .idea/
 .claude/settings.local.json
 Thumbs.db
+/ai_runtime/
+
+# ตัวเปิด exe
+build_launcher/work/
+build_launcher/*.spec
+/SyncLyrics.exe

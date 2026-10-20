@@ -13,7 +13,7 @@ import numpy as np
 import pytest
 
 from app.audio.engine import AudioEngine, EngineConfig
-from app.core.config import Settings
+from app.core.config import PlaybackSettings, Settings
 from app.core.events import EventBus
 from app.core.io_thread import IoThread
 from app.core.models import Line, Lyrics, TimingLevel, TrackRef, Word
@@ -39,6 +39,12 @@ class FakeMedia:
     def __init__(self) -> None:
         self.calls = 0
         self.fail = False
+
+    def fetch_info(self, video_id):
+        if getattr(self, "info_fail", False):
+            raise RuntimeError("yt-dlp พัง")
+        track = TrackRef(video_id=video_id, title="Nova Waves - Midnight Drive", channel="Nova Waves", duration=3.0)
+        return VideoInfo(track=track, duration=3.0, audio_format="251 opus 130k")
 
     def fetch_and_download(self, video_id, target_dir, on_info=None, on_progress=None):
         self.calls += 1
@@ -83,7 +89,8 @@ def rig(app_paths):
 
     threading.Thread(target=pump, daemon=True).start()
     media = FakeMedia()
-    ctl = PlayerController(engine, bus, FakeLyrics(), media, None, app_paths.db_file, Settings(),
+    ctl = PlayerController(engine, bus, FakeLyrics(), media, None, app_paths.db_file,
+                           Settings(playback=PlaybackSettings(app_audio=True)),
                            paths=app_paths, io=io)
     events: list[tuple[str, dict]] = []
     bus.subscribe("*", lambda t, d: events.append((t, d)))

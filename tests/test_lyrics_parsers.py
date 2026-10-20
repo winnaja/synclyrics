@@ -146,3 +146,11 @@ def test_credit_lines_are_dropped_everywhere() -> None:
     yrc = parse_yrc("[0,1000](0,500,0)作词 (500,500,0): X\n[2000,1000](2000,500,0)hello (2500,500,0)you")
     assert [ln.text for ln in yrc.lines] == ["hello you"]
     assert [ln.text for ln in parse_plain("Lyrics by: X\nreal line\n").lines] == ["real line"]
+
+
+def test_vtt_drops_bracketed_sound_descriptions_but_keeps_inline_brackets():
+    from app.lyrics.parsers.subtitles import parse_vtt
+
+    vtt = ("WEBVTT\n\n00:00:01.000 --> 00:00:02.000\n[Ring]\n\n00:00:03.000 --> 00:00:05.000\nThe club is not the best place [whoo]\n\n"
+           "00:00:06.000 --> 00:00:07.000\n[Applause]\n")
+    assert [ln.text for ln in parse_vtt(vtt).lines] == ["The club is not the best place [whoo]"]

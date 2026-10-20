@@ -2,11 +2,14 @@
 # ค่าเริ่มต้นตั้งให้ NVIDIA RTX 4060 (VRAM 8 GB) บนคอมตั้งโต๊ะ
 # แก้ไฟล์นี้ใน %LOCALAPPDATA%\SyncLyrics\config\models.yaml (เขียนเฉพาะค่าที่ต่าง ที่เหลือใช้ค่านี้)
 version: 1
+site_dir: ""              # โฟลเดอร์ site-packages ของ AI (torch ฯลฯ) ถ้าติดตั้งไว้ไดรฟ์อื่น เช่น D:/SyncLyricsAI/site · ว่าง = ใช้ของ .venv หลัก
+model_dir: ""             # ที่เก็บน้ำหนักโมเดล เช่น D:/SyncLyricsAI/hf · ว่าง = ตามค่าเริ่มต้นของแต่ละไลบรารี
 
+preload: true             # โหลดโมเดลค้างใน VRAM ตอนเปิดโปรแกรม (เพลงแรกไม่ต้องรอโหลด) · false = โหลดตอนใช้ครั้งแรก
 device: auto              # auto = ใช้ CUDA ถ้ามี ไม่มีใช้ CPU (ช้า และแจ้งผู้ใช้)
 vram_budget_mb: 6500      # งบ VRAM รวมของ AI worker
 vram_reserve_mb: 1200     # เหลือไว้ให้ UI / shader / วิดีโอ เสมอ
-cudnn_benchmark: true
+cudnn_benchmark: false     # ปิด: เสียงแต่ละบรรทัดยาวไม่เท่ากัน benchmark ซ้ำทุกความยาว (วัดจริงช้าลง ~10 เท่า)
 empty_cache_after_track: true
 worker_priority: below_normal   # ต่ำกว่า UI และเสียงเสมอ
 watchdog_timeout_s: 20    # ไม่มี heartbeat นานเท่านี้ = worker ค้าง -> restart
@@ -24,13 +27,16 @@ align:                    # torchaudio MMS_FA
   fp16: true
   batch_lines: 16         # จำนวนบรรทัดที่ align พร้อมกัน
   min_confidence: 0.45    # ต่ำกว่านี้ใช้เวลาแบบประมาณแทน
+  global_align: false          # จัดเวลาทั้งเพลงด้วย CTC เทียบกับผล Whisper (วัดแล้วยังไม่เพิ่มบรรทัดที่จับคู่ได้ + ช้าลง ~15 วิ ปิดไว้ก่อน)
+  global_min_confidence: 0.5
+  global_switch_gain: 0.15
 
 whisper:                  # faster-whisper (ใช้เมื่อไม่มีเนื้อเพลง หรือไม่มีเวลาบรรทัด)
   enabled: true
   model: large-v3-turbo
   compute_type: float16
   fallback_compute_type: int8_float16   # ใช้เมื่อ VRAM ไม่พอ
-  keep_loaded: false      # false = โหลดเฉพาะตอนใช้ แล้ว unload
+  keep_loaded: true       # true = ค้างใน VRAM (เร็ว ใช้ ~1.7 GB) · false = โหลดเฉพาะตอนใช้แล้ว unload
   beam_size: 5
 
 beats:
@@ -43,3 +49,22 @@ progressive:              # ประมวลผลแบบทยอย (ข�
   overlap_s: 2.5          # ซ้อนหัวท้ายแต่ละช่วง (ตัดที่ขอบบรรทัด)
   lead_s: 30.0            # ต้องนำหน้าตัวเล่นอย่างน้อยเท่านี้
   analysis_deadline_before_mix_s: 30.0
+
+translate:                # คำแปล (เฟส 4) — โมเดลแปลในเครื่อง
+  enabled: true
+  model: JustFrederik/nllb-200-distilled-1.3B-ct2-int8
+  target_lang: tha_Thai
+  beam_size: 4
+  keep_loaded: false
+
+analysis:                 # การฟังเสียงเบื้องหลังเพื่อจัดเวลาเนื้อเพลง (แอปไม่เล่นเสียงเอง โหลดเสียงมาวิเคราะห์อย่างเดียว)
+  enabled: true
+  max_song_s: 900         # ยาวกว่านี้ไม่ใช่เพลง ข้าม
+  sample_rate: 44100
+  window_s: 30            # ประมวลผลทีละช่วงเท่านี้ แล้วทยอยส่งผลเข้าหน้าจอ
+  context_s: 3
+  min_coverage: 0.25      # จับคู่เนื้อเพลงกับเสียงได้น้อยกว่านี้ = เนื้อเพลงอาจเป็นคนละเวอร์ชัน
+  prefer_heard: true      # แสดงตามเสียงที่ AI ได้ยินเป็นหลัก (เนื้อเพลงเว็บใช้แก้คำที่ตรงกัน) · false = ยึดเนื้อเพลงเว็บแล้วจัดเวลา
+  reconstruct_below: 0.5  # จับคู่ตามลำดับได้น้อยกว่านี้ ลองสร้างบรรทัดตามลำดับที่ร้องจริง (รีมิกซ์/โครงสร้างต่าง)
+  reconstruct_gain: 0.08  # ใช้ผลที่สร้างตามเสียงจริงเมื่อจับคู่ข้อความได้มากกว่าแบบเรียงลำดับอย่างน้อยเท่านี้
+  algo_version: 1         # เปลี่ยนเมื่อวิธีจัดเวลาเปลี่ยน -> ผลที่เก็บไว้เก่าหมดอายุ

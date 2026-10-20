@@ -15,6 +15,7 @@ soundfile==0.14.0           # export WAV (Mix Lab) / อ่าน fixtures
 # --- เครือข่าย / YouTube ---
 yt-dlp[default]>=2026.8.19   # [default] รวม yt-dlp-ejs (แก้โจทย์ JS ของ YouTube ต้องมี Node.js ใน PATH) ไม่ล็อกเวอร์ชัน: อัปเดตเองวันละครั้ง
 httpx==0.28.1
+pillow==13.0.0  # ตัดขอบดำของ thumbnail ปก (app/media/artwork.py)
 
 # --- config / ข้อมูล ---
 pydantic==2.14.1
