@@ -142,3 +142,24 @@ def test_word_curve_is_smooth_monotone_and_spans_the_word():
     slopes = [(ps[i + 1] - ps[i]) / (ts[i + 1] - ts[i]) for i in range(len(ts) - 1)]
     avg = 1.0 / (ts[-1] - ts[0])
     assert max(slopes) < 2.0 * avg                     # ไม่พุ่ง/กระโดดเร็วกว่าเฉลี่ยเกิน 2 เท่า
+
+
+def test_assign_singers_splits_two_clusters_and_keeps_solo_and_sparse_data():
+    import numpy as np
+
+    from app.ai.pipeline.speakers import assign_singers
+
+    rng = np.random.default_rng(0)
+
+    def unit(v):
+        return v / np.linalg.norm(v)
+
+    a, b = unit(rng.normal(size=192)), unit(rng.normal(size=192))
+    embs = [unit(a + 0.15 * rng.normal(size=192)) if i % 3 else unit(b + 0.15 * rng.normal(size=192)) for i in range(24)]
+    who, st = assign_singers(embs, [3.0] * 24)
+    assert st["multi"] and set(who) == {0, 1}
+    assert who[1] == who[2] and who[0] != who[1]                      # กลุ่มใหญ่ (i%3 != 0) เป็นนักร้องนำ
+    solo = [unit(a + 0.15 * rng.normal(size=192)) for _ in range(24)]
+    who2, st2 = assign_singers(solo, [3.0] * 24)
+    assert not st2["multi"] and set(who2) == {0}
+    assert assign_singers(embs[:5], [3.0] * 5)[1]["multi"] is False      # ข้อมูลน้อย = ไม่ตัดสิน

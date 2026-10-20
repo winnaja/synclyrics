@@ -256,6 +256,27 @@ class Worker:
                     ln.words, ln.start, ln.end, ln.resolved, ln.quality = cg, cg[0][0], cg[-1][1], True, conf_g
             prev_end = max(prev_end, ln.end)
 
+    def _mark_singers(self, data: dict[str, Any], voice16: Any) -> None:
+        """ลายเสียงรายบรรทัด → จัดกลุ่ม: ≥2 คน = คนที่ร้องมากสุดคือหลัก (ซ้าย) คนรองเป็น voice="second" (ชิดขวา) · บันทึกสถิติใน data["singers"]"""
+        from app.ai.pipeline import speakers
+
+        lines = [ln for ln in data.get("lines", []) if ln.get("words") and ln.get("resolved", True) and ln.get("voice") != "background"]
+        if len(lines) < speakers.MIN_LINES:
+            return
+        if getattr(self, "_spk", None) is None:
+            self._spk = speakers.load_encoder(self.mcfg.get("model_dir") or ".", self.device)
+        spans = [(float(ln["start"]), float(ln["end"])) for ln in lines]
+        embs = speakers.line_embeddings(self._spk, voice16, spans)
+        singers, stats = speakers.assign_singers(embs, [e - s for s, e in spans])
+        data["singers"] = stats
+        if stats.get("multi"):
+            for ln, who in zip(lines, singers):
+                if who == 1:
+                    ln["voice"] = "second"
+        if self.device == "cuda":
+            self._spk = None            # ปล่อย VRAM (โมเดลเล็ก โหลดใหม่ได้ใน ~1 วิ)
+            self._torch.cuda.empty_cache()
+
     def unload_whisper(self) -> None:
         self._whisper = None
         self._wpipe = None
@@ -470,6 +491,11 @@ class Worker:
                     for k, ex in enumerate(heard_extras(data["lines"], lines_in, all_words, nospace=language in NOSPACE_LANGS)):
                         ex["i"] = base_n + 100000 + k
                         data["lines"].append(ex)
+                if acfg.get("detect_singers", True) and data.get("mode") in ("match", "reconstruct"):
+                    try:
+                        self._mark_singers(data, voice)
+                    except Exception as e:  # noqa: BLE001 — ตรวจนักร้องไม่ได้ = ทุกบรรทัดเป็นคนเดียว ไม่พังทั้งงาน
+                        self.emit("degraded", {"reason": f"นับนักร้องไม่สำเร็จ: {e}", "action": "ถือว่าร้องคนเดียว"})
                 if acfg.get("detect_backing", True) and data.get("mode") != "transcribe":
                     try:
                         view = [{"start": ln["start"], "end": ln["end"],

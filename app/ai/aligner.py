@@ -79,7 +79,9 @@ def apply_result(base: Lyrics, result_lines: list[dict[str, Any]], resolved_only
             words.append(Word(text=w.text, start=float(s), end=float(e), confidence=float(conf),
                               timing=WordTimingSource.ALIGNED if resolved else WordTimingSource.ESTIMATED,
                               trailing_space=w.trailing_space, emphasis=emph or w.emphasis, curve=curve))
-        voice = Voice.BACKGROUND if resolved and r.get("voice") == "background" and ln.voice == Voice.MAIN else ln.voice
+        voice = ln.voice
+        if resolved and ln.voice == Voice.MAIN and r.get("voice") in ("background", "second"):
+            voice = Voice.BACKGROUND if r["voice"] == "background" else Voice.SECOND
         lines.append(Line(start=float(r["start"]), end=float(r["end"]), words=words, voice=voice,
                           translation=ln.translation, romanization=ln.romanization))
     if not resolved_only:   # สิ่งที่ AI ได้ยินแต่ไม่มีในเนื้อเพลงเว็บ (คอรัส/ad-lib): แทรกเป็นแถวเสียงประสานตามเวลา
@@ -192,7 +194,7 @@ def lyrics_from_reconstruct(base: Lyrics, result_lines: list[dict[str, Any]], la
             if k == len(words) - 1 and w.end - w.start >= EMPHASIS_LAST_WORD_S and w.confidence >= 0.5:
                 w.emphasis = True
         lines.append(Line(start=words[0].start, end=words[-1].end, words=words,
-                          voice=Voice.BACKGROUND if r.get("voice") == "background" else Voice.MAIN))
+                          voice={"background": Voice.BACKGROUND, "second": Voice.SECOND}.get(str(r.get("voice")), Voice.MAIN)))
     return Lyrics(lines=lines, timing=TimingLevel.WORD, source=base.source, source_id=base.source_id, language=base.language or language,
                   ai_transcribed=bool(lines) and from_ai / len(lines) > 0.3, title=base.title, artist=base.artist, duration=duration or base.duration)
 
