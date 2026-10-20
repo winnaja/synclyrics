@@ -26,9 +26,10 @@ def main() -> int:
     setup_ai_environment(cfg.model_dump())
     import torch  # noqa: F401  (ให้ DLL CUDA พร้อมก่อน ctranslate2)
 
-    from app.ai.llm import SYSTEM_PROMPT, LyricsLLM, build_user_prompt, parse_analysis
+    from app.ai.llm import COMPACT_SYSTEM, LyricsLLM, build_user_prompt, parse_compact
 
-    model_dir = ROOT / "ai_runtime" / "models" / "llm" / "qwen3-1.7b-ct2-int8"
+    name = sys.argv[3] if len(sys.argv) > 3 else "qwen2.5-3b-instruct-ct2-int8"
+    model_dir = ROOT / "ai_runtime" / "models" / "llm" / name
     t0 = time.time()
     llm = LyricsLLM(model_dir, "cuda")
     print(f"โหลดโมเดล {time.time() - t0:.1f}s")
@@ -42,17 +43,15 @@ def main() -> int:
         lines = ["".join(w["text"] + (" " if w.get("trailing_space") else "") for w in ln["words"]).strip() or "" for ln in d["lines"]]
         lines = [t for t in lines if t]
         t0 = time.time()
-        out = llm.chat(SYSTEM_PROMPT, build_user_prompt(lines, d.get("title") or "", "", row[1] or ""), max_new_tokens=900)
+        out = llm.chat(COMPACT_SYSTEM, build_user_prompt(lines, d.get("title") or "", "", row[1] or ""), max_new_tokens=160, no_think="qwen3" in name and "2507" not in name)
         dt = time.time() - t0
-        ann = parse_analysis(out, len(lines))
+        ann = parse_compact(out, lines)
         print(f"\n=== {vid}  {len(lines)} บรรทัด  {dt:.1f}s ===")
-        print(out[:700])
+        print(out[:400])
         if ann:
-            for s in ann["sections"]:
-                print(f"  [{s['label'] or '-':9s}] {s['from'] + 1}-{s['to'] + 1}: {lines[s['from']][:34]} … {lines[s['to']][:30]}")
-            print("  backing:", [f"{k + 1}:{lines[k][:20]}" for k in ann["backing"]])
-            print("  emphasis:", [(e["line"] + 1, e["word"]) for e in ann["emphasis"]])
-            print("  junk:", [f"{k + 1}:{lines[k][:20]}" for k in ann["junk"]])
+            print("  backing:", [f"{k + 1}:{lines[k][:24]}" for k in ann["backing"]])
+            print("  emphasis:", [(e["line"] + 1, e["word"], lines[e["line"]][:30]) for e in ann["emphasis"]])
+            print("  junk:", [f"{k + 1}:{lines[k][:24]}" for k in ann["junk"]])
         else:
             print("  (อ่านผลไม่ได้)")
     return 0

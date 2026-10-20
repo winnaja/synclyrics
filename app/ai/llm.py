@@ -113,3 +113,53 @@ def parse_analysis(text: str, n_lines: int) -> dict[str, Any] | None:
         if 0 <= k < n_lines and w and len(w) <= 40:
             emph.append({"line": k, "word": w})
     return {"sections": sections, "backing": ints(raw.get("backing")), "emphasis": emph[: max(1, n_lines // 3)], "junk": ints(raw.get("junk"))}
+
+
+# ---------------------------------------------------------------------------
+# รุ่นกะทัดรัด (เร็วกว่า: ตอบไม่กี่สิบโทเคน) — ท่อนใช้ app/lyrics/sections.py แล้ว LLM ทำเฉพาะเรื่องความหมาย
+# ---------------------------------------------------------------------------
+COMPACT_SYSTEM = (
+    "You edit song lyrics. The user gives numbered lines. Answer in exactly this format, nothing else:\n"
+    "BACK: comma-separated line numbers that are backing vocals/echo/ad-libs answering the lead (short, parenthesised, or a repeated echo of the previous line); NONE if none\n"
+    "EMPH: semicolon-separated entries 'line=word' choosing the single most impactful word of the emotional peak lines (the hook, title word, "
+    "strongest emotion); at most one entry per 4 lines; NONE if unsure\n"
+    "JUNK: line numbers that are not lyrics (credits, [Chorus] tags); NONE if none\n"
+    "Never copy numbers from these instructions; use only the real line numbers you were given."
+)
+
+
+def parse_compact(text: str, lines: list[str]) -> dict[str, Any] | None:
+    """ตอบรูปแบบ BACK/EMPH/JUNK -> {"backing": [idx], "emphasis": [{"line","word"}], "junk": [idx]} (เลขเริ่ม 0) · ไม่มีสักหัวข้อ = None
+    คำเน้นต้องเป็นคำที่อยู่ในบรรทัดนั้นจริง (กันโมเดลแต่งคำเอง)"""
+    n = len(lines)
+    found = False
+    out: dict[str, Any] = {"backing": [], "emphasis": [], "junk": []}
+
+    def nums(s: str) -> list[int]:
+        res = []
+        for m in re.finditer(r"\d+", s):
+            k = int(m.group(0)) - 1
+            if 0 <= k < n and k not in res:
+                res.append(k)
+        return res
+
+    for raw in (text or "").splitlines():
+        head, _, rest = raw.partition(":")
+        h = head.strip().upper()
+        if h == "BACK":
+            found = True
+            out["backing"] = nums(rest)
+        elif h == "JUNK":
+            found = True
+            out["junk"] = nums(rest)
+        elif h == "EMPH":
+            found = True
+            for ent in rest.split(";"):
+                m = re.match(r"\s*(\d+)\s*=\s*(.+?)\s*$", ent)
+                if not m:
+                    continue
+                k = int(m.group(1)) - 1
+                w = m.group(2).strip().strip("\"'")
+                if 0 <= k < n and w and w.casefold() in re.sub(r"[^\w\s']", " ", lines[k].casefold()).split():
+                    out["emphasis"].append({"line": k, "word": w})
+    return out if found else None
