@@ -138,6 +138,7 @@ def main() -> int:
     ap.add_argument("--from-db", default="", help="สำเนา sqlite ของแอป: ใช้เพลงที่เคยเล่น")
     ap.add_argument("--sleep", type=float, default=8.0)
     ap.add_argument("--no-playlists", action="store_true")
+    ap.add_argument("--list", action="store_true", help="แค่แสดงรายการเพลงที่จะดึง (ไม่โหลด ไม่ใช้การ์ดจอ)")
     args = ap.parse_args()
 
     from app.ai.env import setup_ai_environment
@@ -146,6 +147,19 @@ def main() -> int:
     from app.core.dataset import DATASET_DIR
     from app.core.paths import get_paths
     from app.media.youtube import YouTubeClient
+
+    if args.list:
+        done_ids = {p.parent.name for p in (DATASET_DIR / "songs").glob("*/vocals16k.npy")} if (DATASET_DIR / "songs").exists() else set()
+        n = 0
+        for pid, name in SEED_PLAYLISTS:
+            tracks = playlist_tracks(pid)
+            print(f"\n== {name} ({pid}) — {len(tracks)} เพลง")
+            for t in tracks:
+                n += 1
+                arts = ", ".join(a.get("name", "") for a in (t.get("artists") or []))
+                mark = " [มีแล้ว]" if f"ne{t['id']}" in done_ids else ""
+                print(f"  {n:4d}. {arts} - {t.get('name')}{mark}")
+        return 0
 
     paths = get_paths()
     cfg, _ = load_model(paths, "models.yaml", ModelsConfig)
