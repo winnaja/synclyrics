@@ -450,6 +450,7 @@ class EmphasisCfg(_Model):
     enabled: bool = True
     model: str = "jncraton/Qwen3-4B-Instruct-2507-ct2-int8"
     local_name: str = "qwen3-4b-instruct-2507-ct2-int8"
+    delay_s: float = 45.0     # รอหลังเปิดเพลงก่อนเริ่ม (กันขวางการจัดเวลาเมื่อข้ามเพลงรัว) และรองานจัดเวลาที่ค้างให้เสร็จก่อน
 
 
 class AnalysisCfg(_Model):

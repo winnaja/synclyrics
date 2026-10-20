@@ -70,8 +70,10 @@ class LyricsEmphasis:
         self.db_path = db_path
         self.cfg = models_config.get("emphasis", {})
         self._jobs: dict[str, str] = {}
+        self._waiting: set[str] = set()      # เพลงที่รอคิวอยู่ (ยังไม่ส่งงาน) — ยกเลิกได้ตอนเปลี่ยนเพลง
 
     def cancel(self, video_id: str) -> None:
+        self._waiting.discard(video_id)
         if self._jobs.pop(video_id, None) is not None:
             try:
                 self.ai.cancel_video(video_id)
@@ -122,6 +124,17 @@ class LyricsEmphasis:
             self._publish(video_id, cached)
             return
         self.cancel(video_id)
+        # งานเบื้องหลังไม่เร่งด่วน: โมเดลภาษา 4B ต้องปล่อยโมเดลฟังเสียงออกจากการ์ดจอ (8 GB ไม่พอทั้งคู่) แล้วโหลดกลับตอนเพลงถัดไป
+        # → รอให้ฟังเพลงนี้อยู่สักพัก (ไม่ใช่ข้ามเพลงรัวๆ) และรองานจัดเวลาที่ค้างให้เสร็จก่อน ไม่งั้นขวางการจัดเวลาของเพลงถัดไป
+        self._waiting.add(video_id)
+        await asyncio.sleep(float(self.cfg.get("delay_s", 45)))
+        waited = 0.0
+        while video_id in self._waiting and waited < 240.0 and "align_song" in getattr(self.ai, "pending_types", lambda: set())():
+            await asyncio.sleep(2.0)
+            waited += 2.0
+        if video_id not in self._waiting:
+            return
+        self._waiting.discard(video_id)
         waited = 0.0
         while not getattr(self.ai, "available", False):
             if waited >= WAIT_AI_S or (waited >= 3.0 and not getattr(self.ai, "started", True) and not getattr(self.ai, "_starting", False)):

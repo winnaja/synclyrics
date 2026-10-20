@@ -152,6 +152,11 @@ class AiClient:
     def submit_translate(self, video_id: str, lines: list[str], source_lang: str | None, target_lang: str, handler: EventHandler) -> str:
         return self._submit("translate", {"video_id": video_id, "lines": lines, "source_lang": source_lang, "target_lang": target_lang}, handler)
 
+    def pending_types(self) -> set[str]:
+        """ชนิดงานที่ยังค้างอยู่ (ส่งแล้วยังไม่จบ) — ใช้ให้งานเบื้องหลังที่ไม่เร่งด่วน (คำเน้น) รองานจัดเวลาให้เสร็จก่อน"""
+        with self._lock:
+            return {str(j.get("type")) for j in self._jobs.values()}
+
     def submit_emphasis(self, video_id: str, lines: list[str], handler: EventHandler) -> str:
         return self._submit("emphasis", {"video_id": video_id, "lines": lines}, handler)
 
