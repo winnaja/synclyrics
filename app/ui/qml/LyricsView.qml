@@ -57,7 +57,7 @@ Item {
         0.5 * cfg.look_spring_damping / (2 * Math.sqrt(cfg.look_spring_stiffness))))
 
     onLyricPosChanged: {
-        var i = clockBridge.lineIndexAt(lyricPos)
+        var i = clockBridge.lineIndexAtLead(lyricPos, cfg.ov_scroll_lead_s)
         if (i !== currentLine)
             currentLine = i
     }

@@ -18,7 +18,8 @@ TRANSCRIPT_FORMAT = 1
 
 def transcript_key(models_config: dict[str, Any]) -> dict[str, Any]:
     a = models_config.get("analysis", {})
-    return {"fmt": TRANSCRIPT_FORMAT, "algo": a.get("algo_version", 1), "whisper": models_config.get("whisper", {}).get("model"),
+    return {"fmt": TRANSCRIPT_FORMAT, "algo": a.get("transcript_version", 2),   # แยกจาก algo_version: เปลี่ยนวิธีจัดเวลา/ประกอบบรรทัดไม่ต้องฟังเสียงซ้ำ (Demucs+Whisper ช้า)
+             "whisper": models_config.get("whisper", {}).get("model"),
             "demucs": bool(models_config.get("demucs", {}).get("enabled", True))}
 
 

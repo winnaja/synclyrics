@@ -383,7 +383,7 @@ Window {
     }
 
     // ================= โครงหน้าต่าง =================
-    property int page: 0
+    property int page: 9
     // title / คำที่ใช้ค้น / กลุ่มที่ปุ่ม "คืนค่า" จะรีเซ็ต
     readonly property var pages: [
         { t: "ทั่วไป", g: "general", n: "การเริ่มต้น ปุ่มปิด ข้อมูล" },
@@ -394,8 +394,12 @@ Window {
         { t: "เนื้อเพลง", g: "lyrics", n: "ไฮไลต์ เลื่อน คำแปล" },
         { t: "แอนิเมชัน", g: "anim", n: "ชุด คาราโอเกะ" },
         { t: "การซิงก์", g: "ai", n: "YouTube เวลา ค้นหา AI ฟังเสียง คำแปล" },
-        { t: "คีย์ลัด", g: "hotkeys", n: "ทั้งระบบ" }
+        { t: "คีย์ลัด", g: "hotkeys", n: "ทั้งระบบ" },
+        { t: "ตั้งค่าด่วน", g: "", n: "ใช้บ่อย เริ่มที่นี่ ธีม ขนาด แอนิเมชัน AI" },
+        { t: "แหล่งเนื้อเพลง", g: "sources", n: "เว็บ LRCLIB NetEase QQ คำบรรยาย ตัดบรรทัด รวมหลายแหล่ง" }
     ]
+    // ลำดับในแถบซ้าย (ค่าคือ index ของ pages) — เริ่มที่ "ตั้งค่าด่วน" แล้วค่อยลงรายละเอียด
+    readonly property var navOrder: [9, 5, 10, 6, 3, 4, 1, 2, 7, 0, 8]
     function show(p) { return win.q.length > 0 || win.page === p }
 
     Rectangle {
@@ -407,22 +411,23 @@ Window {
         Column {
             x: 10; y: 64; width: parent.width - 20; spacing: 2
             Repeater {
-                model: win.pages
+                model: win.navOrder
                 Rectangle {
                     required property int index
-                    required property var modelData
+                    required property int modelData
+                    readonly property int pg: modelData
                     activeFocusOnTab: true
                     width: parent.width; height: 38; radius: 10
                     border.width: activeFocus ? 2 : 0
                     border.color: "#FFFFFF"
-                    color: win.page === index && win.q.length === 0 ? "#2d3044" : (nh.hovered ? "#252736" : "transparent")
-                    Text { anchors.verticalCenter: parent.verticalCenter; x: 14; text: parent.modelData.t
-                        color: win.page === parent.index && win.q.length === 0 ? win.fg : win.fg2
-                        font.pixelSize: 14; font.family: cfg.look_font_family }
+                    color: win.page === pg && win.q.length === 0 ? "#2d3044" : (nh.hovered ? "#252736" : "transparent")
+                    Text { anchors.verticalCenter: parent.verticalCenter; x: 14; text: win.pages[parent.pg].t
+                        color: win.page === parent.pg && win.q.length === 0 ? win.fg : win.fg2
+                        font.pixelSize: 14; font.family: cfg.look_font_family; font.weight: parent.pg === 9 ? Font.DemiBold : Font.Normal }
                     HoverHandler { id: nh }
-                    TapHandler { onTapped: { win.query = ""; win.page = parent.index } }
-                    Keys.onSpacePressed: { win.query = ""; win.page = index }
-                    Keys.onReturnPressed: { win.query = ""; win.page = index }
+                    TapHandler { onTapped: { win.query = ""; win.page = parent.pg } }
+                    Keys.onSpacePressed: { win.query = ""; win.page = pg }
+                    Keys.onReturnPressed: { win.query = ""; win.page = pg }
                 }
             }
         }
@@ -475,7 +480,7 @@ Window {
         y: top.y + top.height + 6
         width: parent.width - nav.width - 56
         height: visible ? 150 : 0
-        visible: win.q.length === 0 && (win.page === 3 || win.page === 6)
+        visible: win.q.length === 0 && (win.page === 3 || win.page === 6 || win.page === 9)
     }
 
     Flickable {
@@ -499,6 +504,76 @@ Window {
                 visible: win.q.length > 0 && pageCol.height < 60
                 text: "ไม่พบการตั้งค่าที่ตรงกับ \"" + win.query + "\" (ลองเปิด \"ตัวเลือกขั้นสูง\")"
                 color: win.fg2; font.pixelSize: 13; font.family: cfg.look_font_family
+            }
+
+            // ---------------- ตั้งค่าด่วน ----------------
+            Column {
+                visible: win.show(9); width: parent.width; spacing: 6
+                Intro { text: "ตัวเลือกที่ใช้บ่อยรวมไว้ที่เดียว เห็นผลที่ตัวอย่างด้านบนทันที · อยากปรับละเอียดกว่านี้ไปที่หมวดอื่นทางซ้าย (เปิด \"โหมดละเอียด\" ที่มุมขวาบนเพื่อดูตัวเลือกทั้งหมด)" }
+                Card { title: "หน้าตา"
+                    Row2 { label: "ธีม"; hint: "สีพื้นหลังและความโปร่งใสโดยรวม"; wide: true
+                        Segment { key: "ov_theme"; options: [{v:"soft_dark",t:"Soft Dark"},{v:"pure_black",t:"Pure Black"},{v:"frosted",t:"Frosted Glass"},{v:"minimal_transparent",t:"โปร่งใส"},{v:"light",t:"Light"}] } }
+                    Row2 { label: "ขนาดตัวอักษร (หน้าต่างลอย)"; SSlider { key: "ov_font_size"; from: 12; to: 120; step: 1; decimals: 0; unit: " px" } }
+                    Row2 { label: "ขนาดตัวอักษร (โหมดเต็ม)"; hint: "เป็นเท่าของขนาดมาตรฐาน"; SSlider { key: "fw_font_scale"; from: 0.5; to: 2.0; step: 0.05 } }
+                    Row2 { label: "การจัดวางข้อความ"; wide: true
+                        Segment { key: "ov_align"; options: [{v:"left",t:"ซ้าย"},{v:"center",t:"กลาง"},{v:"right",t:"ขวา"}] } }
+                    Row2 { label: "สีข้อความที่ร้องแล้ว"; wide: true; SColor { key: "ov_text_color" } }
+                }
+                Card { title: "การเคลื่อนไหว"
+                    Row2 { label: "ชุดแอนิเมชัน"; hint: "ชุดสำเร็จรูป · \"นุ่มนวล\" ใกล้ Apple Music ที่สุด"; wide: true
+                        Segment { key: "ov_anim_preset"; options: [{v:"smooth",t:"นุ่มนวล (แบบ Apple)"},{v:"balanced",t:"สมดุล"},{v:"bouncy",t:"เด้งนิดๆ"},{v:"snappy",t:"ฉับไว"},{v:"none",t:"ไม่เคลื่อนไหว"}] } }
+                    Row2 { label: "ไฮไลต์คำที่ร้อง"; hint: "เติมสีไล่ตามเสียง / ทีละคำ / เรืองแสง / ทั้งบรรทัด"; wide: true
+                        Segment { key: "ov_highlight"; options: [{v:"fill",t:"เติมสี"},{v:"word",t:"ทีละคำ"},{v:"glow",t:"เรืองแสง"},{v:"line",t:"ทั้งบรรทัด"}] } }
+                    Row2 { label: "ลอย / ขยาย / เรืองแสง"; hint: "ทั้งคำ = ทันทีที่ถึงคำ · ทีละตัวอักษร = ไล่ตามเสียง (ปรับปริมาณที่หมวดแอนิเมชัน)"; wide: true
+                        Segment { key: "ov_word_anim"; options: [{v:"none",t:"ไม่มี"},{v:"word",t:"ทั้งคำ"},{v:"char",t:"ทีละตัวอักษร"}] } }
+                    Row2 { label: "เลื่อนบรรทัดล่วงหน้า"; hint: "ถ้ารู้สึกว่าบรรทัดเลื่อนช้ากว่าเสียง เพิ่มค่านี้"; SSlider { key: "ov_scroll_lead_s"; from: 0; to: 1; step: 0.05; decimals: 2; unit: " วิ" } }
+                    Row2 { label: "ลดการเคลื่อนไหว"; hint: "ปิดการเลื่อน/ย่อ/ลอย ใช้การเปลี่ยนทันที"; SSwitch { key: "ov_reduced_motion" } }
+                }
+                Card { title: "เนื้อเพลงและ AI"
+                    Row2 { label: "ให้ AI จัดเวลาจากเสียงจริง"; hint: "เนื้อเพลงยึดตามเว็บ AI ฟังเสียงเพื่อทำให้เวลาตรง (ใช้การ์ดจอ NVIDIA)"; SSwitch { key: "ai_enabled" } }
+                    Row2 { label: "แปลเป็นภาษาไทย"; hint: "เพลงที่ไม่ใช่ภาษาไทยแปลด้วยโมเดลในเครื่อง · คำแปลแสดงเมื่อกดปุ่มแปล"; SSwitch { key: "ai_translate" } }
+                    Row2 { label: "ตัดบรรทัดที่ยาวเกินให้สั้นลง"; hint: "แบบ Apple Music — ตัดที่วรรคตอน/คำเชื่อม (มีผลตอนโหลดเพลงครั้งถัดไป)"; SSwitch { key: "ls_split_long_lines" } }
+                    Row2 { label: "ปรับเวลาเนื้อเพลงของเพลงนี้"; hint: "บวก = เนื้อเพลงช้าลง · จำแยกตามเพลง"
+                        Row { anchors.right: parent.right; spacing: 8
+                            Pill { label: "−0.1"; onClicked: player.adjustOffset(-0.1) }
+                            Text { anchors.verticalCenter: parent.verticalCenter; width: 64; horizontalAlignment: Text.AlignHCenter
+                                text: (player.lyricsOffset >= 0 ? "+" : "") + player.lyricsOffset.toFixed(1) + " วิ"; color: win.fg; font.pixelSize: 14 }
+                            Pill { label: "+0.1"; onClicked: player.adjustOffset(0.1) }
+                            Pill { label: "รีเซ็ต"; onClicked: player.resetOffset() }
+                        } }
+                }
+                Card { title: "โปรแกรม"
+                    Row2 { label: "ปุ่มปิด (กากบาท) = ซ่อนลงถาดระบบ"; hint: "ปิดตัวเลือกนี้ = ปุ่มปิดจะปิดโปรแกรมเลย"; SSwitch { key: "st_close_to_tray" } }
+                    Row2 { label: "เปิดพร้อม Windows"; hint: "เปิดแล้วอยู่ที่ถาดระบบ ไม่เด้งหน้าต่างตั้งค่า"; SSwitch { key: "st_launch_with_windows" } }
+                }
+            }
+
+            // ---------------- แหล่งเนื้อเพลง ----------------
+            Column {
+                visible: win.show(10); width: parent.width; spacing: 6
+                Intro { text: "แอปค้นเนื้อเพลงจากหลายแหล่งพร้อมกัน แล้วเทียบกันเอง — ฉบับที่ตรงกับแหล่งอื่นมากที่สุดจะถูกเลือกก่อน (ถ้าไม่ถูกใจกด \"ตัวอื่น\" ได้) · AI ใช้จัดเวลาให้ตรงกับเสียงเท่านั้น ไม่แก้ข้อความ" }
+                Card { title: "แหล่งที่ใช้ค้น"
+                    note: "ปิดทุกแหล่ง = ไม่ค้นเว็บเลย (ใช้ AI ถอดเสียงเป็นเนื้อเพลงอย่างเดียว) · แหล่งที่มีเวลาทีละคำ (NetEase/QQ) ให้ไฮไลต์ละเอียดกว่า"
+                    Row2 { label: "LRCLIB"; hint: "เนื้อเพลงซิงก์ทีละบรรทัดแบบเปิด ครอบคลุมเพลงสากลดี"; SSwitch { key: "ls_src_lrclib" } }
+                    Row2 { label: "NetEase"; hint: "มีเวลาทีละคำ เพลงจีน/เกาหลี/สากล"; SSwitch { key: "ls_src_netease" } }
+                    Row2 { label: "QQ Music"; hint: "มีเวลาทีละคำ เพลงจีน/เกาหลี/สากล"; SSwitch { key: "ls_src_qqmusic" } }
+                    Row2 { label: "คำบรรยาย YouTube"; hint: "คำบรรยายของวิดีโอนั้นเอง เวลาตรงกับวิดีโอแน่นอน (เหมาะกับ MV/คลิปที่ตัดต่อ)"; SSwitch { key: "ls_src_youtube_subs" } }
+                    Row2 { label: "Lyrics.ovh"; hint: "ข้อความล้วนไม่มีเวลา ใช้เป็นตัวช่วยเทียบความถูกต้อง"; SSwitch { key: "ls_src_lyrics_ovh" } }
+                    Row2 { label: "ถอดเสียงเองเมื่อไม่พบเนื้อเพลง"; hint: "AI ฟังเสียงแล้วเขียนเนื้อเพลงให้ (อาจมีคำผิด)"; SSwitch { key: "ls_allow_ai_transcribe" } }
+                }
+                Card { title: "การแบ่งบรรทัด"
+                    Row2 { label: "ตัดบรรทัดที่ยาวเกินให้สั้นลง"; hint: "ตัดที่เครื่องหมายวรรคตอน/คำเชื่อม (and, but, และ, แต่ ...) · บรรทัดที่มีคำแปลไม่ตัด"; SSwitch { key: "ls_split_long_lines" } }
+                    Row2 { label: "ความกว้างสูงสุดของบรรทัด"; hint: "น้อย = บรรทัดสั้น ตัดบ่อย · ตัวอักษร CJK นับเป็น 2"; adv: true; SSlider { key: "ls_max_line_width"; from: 20; to: 120; step: 2; decimals: 0 } }
+                }
+                Card { title: "เพลงตอนนี้"
+                    Row2 { label: "เพลงตอนนี้"; hint: player.title.length > 0 ? player.title + " — " + player.artist : "ยังไม่มี" }
+                    Row2 { label: "แหล่งที่ใช้อยู่"; hint: player.sourceLabel.length > 0 ? player.sourceLabel : "-" }
+                    Row2 { label: "เปลี่ยน/โหลดใหม่"; hint: "ตัวอื่น = ฉบับอันดับถัดไป · โหลดใหม่ = ค้นทุกแหล่งอีกรอบ"
+                        Row { anchors.right: parent.right; spacing: 8
+                            Pill { label: "ตัวอื่น"; onClicked: player.nextCandidate() }
+                            Pill { label: "โหลดใหม่"; onClicked: player.refreshLyrics() }
+                        } }
+                }
             }
 
             // ---------------- ทั่วไป ----------------
@@ -793,6 +868,7 @@ Window {
                                  move: "เลื่อนอย่างเดียว ความสว่างของบรรทัดไม่ค่อยๆ เปลี่ยน (จะเปลี่ยนทันที)",
                                  scale: "บรรทัดปัจจุบันขยายใหญ่ บรรทัดอื่นย่อเล็ก" })[cfg.ov_animation]
                         Segment { key: "ov_animation"; options: [{v:"fade_move",t:"จาง + เลื่อน"},{v:"fade",t:"จาง"},{v:"move",t:"เลื่อน"},{v:"scale",t:"ย่อ/ขยาย"}] } }
+                    Row2 { label: "เลื่อนบรรทัดล่วงหน้า"; hint: "เริ่มเลื่อนก่อนบรรทัดถัดไปเริ่มร้องเท่านี้ ให้ไปถึงกลางจอพอดีตอนเริ่มร้อง (0 = เริ่มเลื่อนตอนเริ่มร้อง ซึ่งรู้สึกหน่วง)"; SSlider { key: "ov_scroll_lead_s"; from: 0; to: 1; step: 0.05; decimals: 2; unit: " วิ" } }
                     Row2 { label: "ความเร็ว"; hint: "มาก = เปลี่ยนเร็วขึ้น"; adv: true; SSlider { key: "ov_anim_speed"; from: 0.3; to: 3.0; step: 0.05 } }
                     Row2 { label: "ความแรง"; adv: true; SSlider { key: "ov_animation_intensity"; from: 0; to: 2 } }
                     Row2 { label: "เบลอบรรทัดที่ไม่ได้ร้อง — โหมดเต็ม"; hint: "ยิ่งไกลจากบรรทัดที่ร้องยิ่งเบลอ (แบบ Apple Music) · 0 = ไม่เบลอ"; SSlider { key: "fw_blur"; from: 0; to: 1; step: 0.05 } }

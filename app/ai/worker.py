@@ -273,7 +273,7 @@ class Worker:
         from app.ai import cache
         from app.ai.pipeline import audio, stems, transcribe
         from app.ai.pipeline.match import (InLine, TWord, clean_transcript, group_words_into_lines, match_lines,
-                                           reconstruct_by_transcript, transcript_reliable)
+                                           reconstruct_by_transcript, transcript_reliable, fill_missing_lines)
         from app.ai.pipeline.match import NOSPACE_LANGS
         from app.ai.pipeline.vocal_activity import vocal_segments
 
@@ -364,7 +364,8 @@ class Worker:
             if (prefer_heard or res.coverage < float(acfg.get("reconstruct_below", 0.5))) and transcript_reliable(all_words):
                 # โครงสร้างเพลงต่างจากเนื้อเพลง (รีมิกซ์/คนละเวอร์ชัน): จับคู่เรียงลำดับไม่ได้ -> สร้างบรรทัดตามลำดับที่ร้องจริงจากเสียง
                 # แล้วใช้ข้อความเนื้อเพลงสำเร็จรูปแทนเฉพาะบรรทัดที่ตรงกัน (สะกดถูก) — เวลาถูกเสมอเพราะมาจากเสียง
-                rr = reconstruct_by_transcript(lines_in, all_words, nospace=language in NOSPACE_LANGS)
+                rr = reconstruct_by_transcript(lines_in, all_words, nospace=language in NOSPACE_LANGS, web_only=not prefer_heard)
+                rr = fill_missing_lines(rr, lines_in, [tuple(x) for x in vsegs], duration)   # บรรทัดที่ AI ฟังไม่ได้ยิน แต่มีเสียงร้องจริง: เติมจากเนื้อเพลงเว็บ
                 gain = float(acfg.get("reconstruct_gain", 0.08))
                 # สร้างตามเสียงจริงเมื่อ: ได้ข้อความตรงเนื้อเพลงเพิ่มชัดเจน (โครงสร้างต่าง) หรือเนื้อเพลงแทบไม่ตรงเลย (ผิดเวอร์ชัน/คนละเพลง — ถอดเสียงดีกว่าเนื้อผิด)
                 if rr.lines and (prefer_heard or rr.coverage >= res.coverage + gain or res.coverage < float(acfg.get("min_coverage", 0.25))):
@@ -381,6 +382,40 @@ class Worker:
                                "words": [[a, b, 0.8] for a, b in (ln.word_times or [])]} for i, ln in enumerate(auto)]}
         data.update({"mode": mode, "language": language, "duration": duration, "vocal_segments": [list(s) for s in vsegs],
                      "transcript_words": len(all_words)})
+        if acfg.get("snap_to_voice", True):
+            voice = vocals16[:int(duration * 16000)] if cached is None else self._load_vocals(stems_dir)
+            if voice is not None:
+                from app.ai.pipeline.match import retime_unresolved
+                from app.ai.pipeline.vocal_activity import classify_backing
+                from app.ai.pipeline.vocal_activity import compact_line_outliers, remap_curves, snap_line_onset, snap_words_to_voice
+
+                for ln in data.get("lines", []):
+                    if ln.get("words") and ln.get("resolved", True):
+                        old = [list(w) for w in ln["words"]]
+                        ln["words"] = snap_words_to_voice(snap_line_onset(compact_line_outliers(ln["words"]), voice), voice)
+                        if ln.get("curves"):
+                            ln["curves"] = remap_curves(ln["curves"], old, ln["words"])
+                        ln["start"] = ln["words"][0][0]
+                        ln["end"] = ln["words"][-1][1]
+                if data.get("mode") == "match":
+                    retime_unresolved(data["lines"], lines_in)
+                if acfg.get("heard_extras", True) and data.get("mode") in ("match", "reconstruct") and all_words:
+                    from app.ai.pipeline.match import heard_extras
+
+                    base_n = len(lines_in)
+                    for k, ex in enumerate(heard_extras(data["lines"], lines_in, all_words, nospace=language in NOSPACE_LANGS)):
+                        ex["i"] = base_n + 100000 + k
+                        data["lines"].append(ex)
+                if acfg.get("detect_backing", True) and data.get("mode") != "transcribe":
+                    try:
+                        view = [{"start": ln["start"], "end": ln["end"],
+                                 "words": ln.get("text_words") or (list(lines_in[ln["i"]].words) if ln["i"] < len(lines_in) else [])}
+                                for ln in data.get("lines", [])]
+                        for ln, is_bg in zip(data.get("lines", []), classify_backing(view, voice)):
+                            if is_bg and ln.get("resolved", True):
+                                ln["voice"] = "background"
+                    except Exception:  # noqa: BLE001 — ตรวจเสียงประสานไม่ได้ = แสดงเป็นบรรทัดปกติ ไม่พังทั้งงาน
+                        pass
         self.emit("result", {"job_id": job_id, "kind": "align_final", "data": data})
         self.emit("progress", {"job_id": job_id, "fraction": 1.0})
         if self.mcfg.get("empty_cache_after_track", True) and self.device == "cuda":
@@ -400,7 +435,8 @@ class Worker:
     @staticmethod
     def _pack(vid: str, res: Any, only_resolved: bool) -> dict[str, Any]:
         lines = [{"i": i, "start": ln.start, "end": ln.end, "words": [list(w) for w in ln.words], "resolved": ln.resolved,
-                  "quality": round(ln.quality, 3)} for i, ln in enumerate(res.lines) if ln.resolved or not only_resolved]
+                  "quality": round(ln.quality, 3), "curves": [getattr(w, "curve", None) for w in ln.words]}
+                 for i, ln in enumerate(res.lines) if ln.resolved or not only_resolved]
         return {"video_id": vid, "lines": lines, "coverage": round(res.coverage, 4), "offset_s": res.offset_s, "scale": res.scale,
                 "notes": list(res.notes)}
 
@@ -475,4 +511,7 @@ class Worker:
 
 def worker_main(requests: Any, events: Any, config: dict[str, Any]) -> None:
     """จุดเข้าของ process (multiprocessing.Process(target=worker_main, args=(rq, eq, config)))"""
+    from app.core.streams import ensure_std_streams
+
+    ensure_std_streams()
     Worker(requests, events, config).run()

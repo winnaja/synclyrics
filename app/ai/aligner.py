@@ -74,11 +74,30 @@ def apply_result(base: Lyrics, result_lines: list[dict[str, Any]], resolved_only
         for wi, (w, (s, e, conf)) in enumerate(zip(ln.words, r["words"])):
             dur = float(e) - float(s)
             emph = resolved and wi == n - 1 and dur >= EMPHASIS_LAST_WORD_S and conf >= 0.5
+            curves = r.get("curves") or []
+            curve = curves[wi] if resolved and wi < len(curves) else None
             words.append(Word(text=w.text, start=float(s), end=float(e), confidence=float(conf),
                               timing=WordTimingSource.ALIGNED if resolved else WordTimingSource.ESTIMATED,
-                              trailing_space=w.trailing_space, emphasis=emph or w.emphasis))
-        lines.append(Line(start=float(r["start"]), end=float(r["end"]), words=words, voice=ln.voice,
+                              trailing_space=w.trailing_space, emphasis=emph or w.emphasis, curve=curve))
+        voice = Voice.BACKGROUND if resolved and r.get("voice") == "background" and ln.voice == Voice.MAIN else ln.voice
+        lines.append(Line(start=float(r["start"]), end=float(r["end"]), words=words, voice=voice,
                           translation=ln.translation, romanization=ln.romanization))
+    if not resolved_only:   # สิ่งที่ AI ได้ยินแต่ไม่มีในเนื้อเพลงเว็บ (คอรัส/ad-lib): แทรกเป็นแถวเสียงประสานตามเวลา
+        for r in result_lines:
+            if not r.get("extra"):
+                continue
+            texts, times = list(r.get("text_words") or []), list(r.get("words") or [])
+            if not texts or len(texts) != len(times):
+                continue
+            if base.language == "th":
+                texts, times = regroup_tokens(texts, times, _thai_segment)
+                if not texts:
+                    continue
+            ws = [Word(text=t, start=float(a_), end=float(b_), confidence=float(c_), timing=WordTimingSource.ALIGNED,
+                       trailing_space=k < len(texts) - 1 and _spaced(base.language)) for k, (t, (a_, b_, c_)) in enumerate(zip(texts, times))]
+            extra_line = Line(start=ws[0].start, end=ws[-1].end, words=ws, voice=Voice.BACKGROUND)
+            pos = next((k for k, ln in enumerate(lines) if ln.start > extra_line.start), len(lines))   # แทรกตามเวลา ไม่เรียงบรรทัดเดิมใหม่
+            lines.insert(pos, extra_line)
     timing = TimingLevel.WORD if any(w.timing == WordTimingSource.ALIGNED for ln in lines for w in ln.words) else base.timing
     return Lyrics(lines=lines, timing=timing, source=base.source, source_id=base.source_id, language=base.language,
                   has_translation=base.has_translation, ai_transcribed=base.ai_transcribed, title=base.title, artist=base.artist,
@@ -172,7 +191,8 @@ def lyrics_from_reconstruct(base: Lyrics, result_lines: list[dict[str, Any]], la
         for k, w in enumerate(words):   # เน้นคำท้ายบรรทัดที่ลากเสียง (เหมือนโหมดปกติ)
             if k == len(words) - 1 and w.end - w.start >= EMPHASIS_LAST_WORD_S and w.confidence >= 0.5:
                 w.emphasis = True
-        lines.append(Line(start=words[0].start, end=words[-1].end, words=words, voice=Voice.MAIN))
+        lines.append(Line(start=words[0].start, end=words[-1].end, words=words,
+                          voice=Voice.BACKGROUND if r.get("voice") == "background" else Voice.MAIN))
     return Lyrics(lines=lines, timing=TimingLevel.WORD, source=base.source, source_id=base.source_id, language=base.language or language,
                   ai_transcribed=bool(lines) and from_ai / len(lines) > 0.3, title=base.title, artist=base.artist, duration=duration or base.duration)
 
@@ -348,7 +368,7 @@ class LyricsAligner:
             lyr = lyrics_from_reconstruct(base, data.get("lines", []), data.get("language"), dur or None)
             if not lyr.lines:
                 return
-            self._publish(video_id, lyr, f"{clean_label(label)} · จัดตามเสียงจริง (โครงสร้างเพลงต่างจากเนื้อเพลง)", True, coverage=data.get("coverage"), gaps=gaps,
+            self._publish(video_id, lyr, f"{clean_label(label)} · จัดเวลาจากเสียงแล้ว (เรียงท่อนตามเสียงจริง)", True, coverage=data.get("coverage"), gaps=gaps,
                           restructured=True)
         elif data.get("version_mismatch"):
             # จับคู่กับเสียงได้น้อยมาก: เนื้อเพลงน่าจะเป็นคนละเวอร์ชัน — ไม่แตะเวลาเดิม แจ้งผู้ใช้ และให้ controller ลองตัวถัดไป

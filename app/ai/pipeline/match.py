@@ -418,8 +418,10 @@ def _plausible_ai_line(words: list[str], probs: list[float], min_prob: float = 0
     return len(toks) < 4 or len(set(toks)) >= max(2, len(toks) // 3)
 
 
-def reconstruct_by_transcript(lines: list[InLine], transcript: list[TWord], min_ratio: float = 0.62, nospace: bool = False) -> ReResult:
-    """สร้างบรรทัดตามลำดับ "ที่ร้องจริง" จาก transcript แล้วแทนข้อความด้วยบรรทัดเนื้อเพลงที่ตรงที่สุด (สะกดถูก) ถ้าคล้ายพอ
+def reconstruct_by_transcript(lines: list[InLine], transcript: list[TWord], min_ratio: float = 0.62, nospace: bool = False,
+                              web_only: bool = False) -> ReResult:
+    """web_only=True: ใช้เฉพาะข้อความเนื้อเพลงเว็บ (บรรทัดที่ AI ฟังได้แต่ไม่ตรงเนื้อเพลงถูกทิ้ง — ผู้ใช้สั่งให้ยึดเว็บเป็นหลัก)
+    สร้างบรรทัดตามลำดับ "ที่ร้องจริง" จาก transcript แล้วแทนข้อความด้วยบรรทัดเนื้อเพลงที่ตรงที่สุด (สะกดถูก) ถ้าคล้ายพอ
     ใช้เมื่อโครงสร้างเพลงต่างจากเนื้อเพลง (จับคู่แบบเรียงลำดับไม่ได้) — เวลาถูกต้องเสมอเพราะมาจากเสียง"""
     clean = clean_transcript(transcript)
     tlines = group_words_into_lines(clean, max_words=30 if nospace else 9, max_chars=36 if nospace else 44)
@@ -434,12 +436,12 @@ def reconstruct_by_transcript(lines: list[InLine], transcript: list[TWord], min_
         ai_words = [(a, b, p) for (a, b), p in zip(wt, probs)]
         ai_line = ReLine(tl.start, tl.end, ai_words, list(tl.words), None)
         if len(tnorm) < 3 or not lines:
-            if _plausible_ai_line(tl.words, probs):
+            if not web_only and _plausible_ai_line(tl.words, probs):
                 out.append(ai_line)
             continue
         ratio, i, j = _best_lyric_span(tnorm, lyric_norm)
         if ratio < min_ratio:
-            if _plausible_ai_line(tl.words, probs):   # ข้อความที่ AI ฟังได้แต่ไม่ตรงเนื้อเพลง: แสดงเฉพาะที่น่าเชื่อถือ (ไม่ใช่เสียงรบกวน/คำมั่ว)
+            if not web_only and _plausible_ai_line(tl.words, probs):   # ข้อความที่ AI ฟังได้แต่ไม่ตรงเนื้อเพลง: แสดงเฉพาะที่น่าเชื่อถือ (ไม่ใช่เสียงรบกวน/คำมั่ว)
                 out.append(ai_line)
             continue
         covered += len(tnorm)
@@ -459,8 +461,168 @@ def reconstruct_by_transcript(lines: list[InLine], transcript: list[TWord], min_
         else:  # จับคู่ระดับตัวอักษรไม่ได้ในบรรทัดเดียว: กระจายตามช่วงเวลาของบรรทัดที่ฟังได้
             words = _spread(InLine(words=lyric_words), tl.start, tl.end)
         out.append(ReLine(words[0][0], words[-1][1], [(a, b, c) for a, b, c in words], lyric_words, list(range(i, j))))
-    out.sort(key=lambda r: r.start)   # ต้องเรียงตามเวลาเสมอ (UI หาบรรทัดปัจจุบันด้วยการค้นหาแบบแบ่งครึ่ง)
+    out = tidy_lines(out)   # เรียงตามเวลา + ตัดบรรทัดซ้ำ/เวลาทับ (UI หาบรรทัดปัจจุบันด้วยการค้นหาแบบแบ่งครึ่ง)
     return ReResult(lines=out, coverage=covered / total if total else 0.0)
+
+# คำร้องประกอบ/ad-lib/คอรัสคำเดียวที่แสดงเป็นแถวเสียงประสานได้ (ผ่านการกรองความมั่นใจและ "ไม่ใช่ส่วนของบรรทัดข้างเคียง" แล้ว)
+ADLIBS = frozenset({
+    "yeah", "yea", "ye", "oh", "ooh", "oooh", "ah", "aah", "ahh", "hey", "heyy", "woah", "whoa", "woo", "wooh", "uh", "huh", "mm", "mmm", "hmm",
+    "la", "na", "nah", "ayy", "aye", "yo", "ha", "haha", "ohh", "eh", "ay", "doo", "da", "hoo", "ooo", "uhh", "yah", "yup",
+    "เย้", "โอ้", "อา", "เฮ้", "อู้", "ลา", "นา", "ฮึ", "เย่", "โอ", "อ๊า",
+    "예", "오", "어", "아", "에이", "야", "우", "나", "라", "イェー", "オー", "ああ", "はい", "哦", "啊", "耶", "喔",
+})
+
+
+def heard_extras(out_lines: list[dict], lines: list[InLine], transcript: list[TWord], nospace: bool = False,
+                 min_ratio: float = 0.62, max_words: int = 6, max_dur_s: float = 6.0) -> list[dict]:
+    """สิ่งที่ AI "ได้ยิน" แต่ไม่มีในเนื้อเพลงเว็บ — เสียงประสาน/คอรัส/ad-lib (เช่น "oh-oh-oh", "I watch you") : ผู้ใช้ให้ AI ฟังเสียงจริงเพื่อเก็บส่วนนี้
+    เอาคำใน transcript ที่ตกนอกช่วงของบรรทัดเว็บที่จับคู่ได้ มารวมเป็นบรรทัดสั้น แล้วคืนเป็นบรรทัดเสียงประสาน (voice=background, extra=True)
+    กรองเข้ม: มั่นใจเฉลี่ย ≥ 0.55 · ไม่วนซ้ำ · ไม่เกิน max_words คำ/max_dur_s วินาที · ไม่ตรงกับบรรทัดเนื้อเพลงบรรทัดใดเลย (ไม่งั้นเป็นแค่คำเดียวกัน)"""
+    spans = [(float(ln["start"]) - 0.25, float(ln["end"]) + 0.25) for ln in out_lines if ln.get("resolved", True) and ln.get("words")]
+    spans.sort()
+    clean = clean_transcript(transcript)
+
+    def covered(t: float) -> bool:
+        return any(a <= t <= b for a, b in spans)
+
+    free = [w for w in clean if not covered((w.start + w.end) / 2.0)]
+    if not free:
+        return []
+    lyric_norm = [norm_chars("".join(ln.words)) for ln in lines]
+    groups = group_words_into_lines(free, max_gap_s=0.6, max_words=max_words, max_chars=36 if nospace else 32)
+    extras: list[dict] = []
+    for g in groups:
+        wt = g.word_times or []
+        if not g.words or not wt or len(g.words) > max_words:
+            continue
+        probs = g.word_probs or [0.7] * len(wt)
+        text = norm_chars("".join(g.words))
+        if len(text) < 3 or g.end - g.start > max_dur_s or not _plausible_ai_line(g.words, probs):
+            continue
+        if len(g.words) < 2 and len(text) < 5 and text not in ADLIBS:
+            continue                                   # คำเดี่ยวสั้นๆ มักเป็นคำหลุดจากขอบบรรทัดข้างเคียง — ยกเว้นคำคอรัส/ad-lib ที่รู้จัก (yeah, oh, ooh ...)
+        if any(float(ol["start"]) - 3.0 <= g.start <= float(ol["end"]) + 3.0 and ol["i"] < len(lines)
+               and text in norm_chars("".join(lines[ol["i"]].words)) for ol in out_lines):
+            continue                                   # เป็นส่วนหนึ่งของบรรทัดเนื้อเพลงที่อยู่ติดกัน (คำต้น/ท้ายบรรทัดที่เวลาเลยขอบมา) ไม่ซ้ำเป็นบรรทัดใหม่
+        if lyric_norm and _best_lyric_span(text, lyric_norm, max_span=1)[0] >= min_ratio:
+            continue                                   # คำเดียวกับบรรทัดเนื้อเพลง (แค่เวลาหลุดช่วง) ไม่ซ้ำ
+        extras.append({"start": g.start, "end": g.end, "text_words": list(g.words), "voice": "background", "extra": True,
+                       "resolved": True, "quality": round(float(sum(probs) / len(probs)), 3),
+                       "words": [[a, b, float(p)] for (a, b), p in zip(wt, probs)]})
+    return extras
+
+
+def retime_unresolved(out_lines: list[dict], lines: list[InLine], neighbors: int = 3) -> None:
+    """บรรทัดที่ AI จับคู่เสียงไม่ได้: ใช้เวลาของเว็บ + ส่วนต่าง (AI - เว็บ) ค่ากลางของบรรทัดข้างเคียงที่จับคู่ได้ (±neighbors บรรทัด)
+    แทนค่าออฟเซ็ตทั้งเพลงที่อาจเพี้ยน (ข้างเคียงยังเป็นตัวแทนเวลาจริงของช่วงนั้นดีที่สุด) · แก้ out_lines ในที่"""
+    by_i = {int(ln["i"]): ln for ln in out_lines}
+    deltas: dict[int, float] = {}
+    for i, ln in by_i.items():
+        if ln.get("resolved") and ln.get("words") and i < len(lines) and lines[i].start is not None:
+            deltas[i] = float(ln["words"][0][0]) - float(lines[i].start)
+    if not deltas:
+        return
+    keys = sorted(deltas)
+    for i, ln in by_i.items():
+        if ln.get("resolved") or i >= len(lines) or lines[i].start is None:
+            continue
+        near = sorted(keys, key=lambda k: abs(k - i))[:neighbors * 2]
+        near = [k for k in near if abs(k - i) <= 12]
+        if not near:
+            continue
+        d = float(sorted(deltas[k] for k in near)[len(near) // 2])
+        src = lines[i]
+        wt = src.word_times if src.word_times and len(src.word_times) == len(src.words) else None
+        if wt:
+            words = [[float(a) + d, float(b) + d, 0.3] for a, b in wt]
+        else:
+            words = [list(w) for w in _spread(src, float(src.start) + d, float(src.end if src.end is not None else src.start + 3.0) + d)]
+        ln["words"] = words
+        ln["start"] = words[0][0]
+        ln["end"] = words[-1][1]
+
+
+def tidy_lines(lines: list[ReLine]) -> list[ReLine]:
+    """ทำความสะอาดผลที่ประกอบจากเสียง: เรียงตามเวลา · ตัดบรรทัดซ้ำ (ข้อความอยู่ในอีกบรรทัดที่เวลาทับ/ติดกัน) · ไม่ให้เวลาทับกัน
+    (UI หาบรรทัดปัจจุบันด้วยเวลา บรรทัดทับกัน = เห็นข้อความซ้ำซ้อนบนจอ)"""
+    out: list[ReLine] = []
+    for ln in sorted(lines, key=lambda r: (r.start, r.end)):
+        if not out:
+            out.append(ln)
+            continue
+        prev = out[-1]
+        a, b = norm_chars("".join(prev.text_words)), norm_chars("".join(ln.text_words))
+        overlap = min(prev.end, ln.end) - max(prev.start, ln.start)
+        shorter = max(0.05, min(prev.end - prev.start, ln.end - ln.start))
+        same_src = bool(prev.src and ln.src and set(ln.src) & set(prev.src))
+        contained = bool(a and b and min(len(a), len(b)) >= 4 and (a in b or b in a))
+        close = ln.start - prev.end < 1.0
+        if (overlap > 0.3 * shorter and (same_src or contained)) or (contained and close and same_src):
+            if len(b) > len(a):          # เก็บบรรทัดที่ข้อความครบกว่า
+                out[-1] = ln
+            continue
+        if ln.start < prev.end:          # เวลาทับเล็กน้อย: ตัดท้ายบรรทัดก่อนหน้า (ไม่ให้สองบรรทัดเป็น "ปัจจุบัน" พร้อมกัน)
+            new_end = max(prev.start + 0.2, ln.start)
+            prev.words = [(x, min(y, new_end), c) for x, y, c in prev.words if x < new_end]
+            prev.end = new_end
+            if not prev.words:
+                out.pop()
+        out.append(ln)
+    return out
+
+
+
+def fill_missing_lines(res: ReResult, lines: list[InLine], vsegs: list[tuple[float, float]], duration: float,
+                       min_voiced_per_line_s: float = 0.8) -> ReResult:
+    """เติมบรรทัดเนื้อเพลงที่ AI ฟังไม่ได้ยิน (แร็พเร็ว/เสียงซ้อน/ดูเอ็ต) ลงในช่วงที่ "มีเสียงร้องจริง" ระหว่างบรรทัดที่ฟังได้ทั้งสองข้าง
+    เวลากระจายตามจำนวนตัวอักษรในเวลาที่มีเสียงร้อง (ความมั่นใจต่ำ = ประมาณ) · ไม่เติมถ้าช่วงนั้นเสียงร้องน้อยเกินไป (ไม่ใช่บรรทัดนั้นแน่)"""
+    if not res.lines or not lines or not vsegs:
+        return res
+    anchors = sorted(((min(r.src), max(r.src), r) for r in res.lines if r.src), key=lambda t: (t[0], t[1], t[2].start))
+    used = {k for _a, _b, r in anchors for k in r.src or []}
+    missing = [k for k in range(len(lines)) if k not in used and lines[k].words]
+    if not missing:
+        return res
+    runs: list[list[int]] = []
+    for k in missing:
+        if runs and k == runs[-1][-1] + 1:
+            runs[-1].append(k)
+        else:
+            runs.append([k])
+    added: list[ReLine] = []
+    for run in runs:
+        k0, k1 = run[0], run[-1]
+        before = [r for lo, hi, r in anchors if hi < k0]
+        after = [r for lo, hi, r in anchors if lo > k1]
+        if not before and not after:
+            continue
+        t0 = max(r.end for r in before) if before else 0.0
+        t1 = min(r.start for r in after) if after else duration
+        spans = [(max(a, t0), min(b, t1)) for a, b in vsegs if min(b, t1) - max(a, t0) > 0.05]
+        voiced = sum(b - a for a, b in spans)
+        if voiced < min_voiced_per_line_s * len(run):
+            continue
+        weights = [max(1, len(norm_chars("".join(lines[k].words)))) for k in run]
+        tot = sum(weights)
+
+        def to_real(x: float) -> float:
+            for a, b in spans:
+                if x <= b - a:
+                    return a + x
+                x -= b - a
+            return spans[-1][1]
+
+        acc = 0.0
+        for k, w in zip(run, weights):
+            a, b = to_real(voiced * acc / tot), to_real(voiced * (acc + w) / tot)
+            acc += w
+            if b - a < 0.2:
+                continue
+            words = _spread(lines[k], a, b)
+            added.append(ReLine(a, b, words, list(lines[k].words), [k]))
+    if not added:
+        return res
+    return ReResult(lines=tidy_lines(res.lines + added), coverage=res.coverage)
 
 
 def transcript_reliable(words: list[TWord], min_words: int = 40, min_prob: float = 0.55) -> bool:

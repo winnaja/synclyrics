@@ -32,6 +32,7 @@ from app.core.log import get_logger
 from app.core.models import Lyrics, TimingLevel, TrackMeta, TrackRef
 from app.lyrics import scoring
 from app.lyrics.parsers.lrc import parse_plain
+from app.lyrics.linebreak import split_long_lines
 from app.lyrics.sources.base import LyricsCandidate, LyricsQuery, LyricsSource, discover
 from app.lyrics.timing_estimate import estimate_lyrics
 from app.lyrics.title_parser import parse_track, swap_meta
@@ -97,7 +98,7 @@ class LyricsService:
     def enabled_sources(self) -> list[LyricsSource]:
         out: list[LyricsSource] = []
         for name, cls in self._source_classes.items():
-            if self.settings.enabled.get(name, cls.enabled_by_default):
+            if getattr(self.settings, f"src_{name}", True) and self.settings.enabled.get(name, cls.enabled_by_default):
                 out.append(cls())
         return out
 
@@ -191,6 +192,8 @@ class LyricsService:
         ly = chosen_c.lyrics
         if ly.timing != TimingLevel.WORD:
             ly = estimate_lyrics(ly, duration or ly.duration or 240.0)
+        if getattr(self.settings, "split_long_lines", False):
+            ly = split_long_lines(ly, int(self.settings.max_line_width))
         label = self._label(chosen_c.lyrics)
         got = chosen_c.matched_duration or chosen_c.lyrics.duration
         diff = abs(duration - got) if duration and got else 0.0
@@ -211,7 +214,7 @@ class LyricsService:
         ):
             return meta
         swapped = swap_meta(meta)
-        best_orig = max(c.score for c in cands)
+        best_orig = max(c.score_detail.get("base", c.score) for c in cands)   # เทียบคะแนนปกติ (ไม่รวมโบนัสฉันทามติ)
         copies = [LyricsCandidate(lyrics=c.lyrics, matched_title=c.matched_title, matched_artist=c.matched_artist,
                                   matched_duration=c.matched_duration) for c in cands]
         best_swap = max((scoring.score_candidate(c, swapped, duration) for c in copies), default=0.0)
@@ -266,6 +269,7 @@ class LyricsService:
             for c in got:
                 scoring.score_candidate(c, meta, duration)
             all_cands.extend(got)
+            scoring.apply_consensus(all_cands)   # เทียบเนื้อเพลงข้ามแหล่ง: ฉบับที่ตรงกับแหล่งอื่นมากได้โบนัส
             if on_update is not None and got:
                 interim = self._present(all_cands, duration, meta, final=False)
                 if interim.chosen is not None:
@@ -283,6 +287,7 @@ class LyricsService:
             meta = new_meta
             await asyncio.to_thread(self._save_names, track.video_id, meta)
         all_cands = [c for c in all_cands if c.score > 0]
+        scoring.apply_consensus(all_cands)
         await asyncio.to_thread(self._store, track.video_id, all_cands)
         result = self._present(all_cands, duration, meta)
         if result.chosen is not None:

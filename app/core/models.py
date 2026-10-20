@@ -52,6 +52,9 @@ class Word:
     trailing_space: bool = False
     # คำเน้นแบบ Apple Music (เรืองแสง+ขยายตอนร้อง): AI ระบุ (เช่น คำท้ายบรรทัดที่ลากเสียง) · คำที่ยาวเกินค่าตั้งถูกเน้นโดย UI อยู่แล้ว
     emphasis: bool = False
+    # เส้นโค้งการร้องภายในคำ (จาก forced alignment รายตัวอักษร): [t0, f0, t1, f1, ...] f = สัดส่วนตัวอักษรที่ร้องแล้ว 0..1
+    # คำหลายพยางค์ที่ร้องลากไม่เท่ากัน (every-ve-ry-thing) จะเติมสีตามตัวอักษรที่กำลังร้องจริง ไม่ไล่เส้นตรงทั้งคำ · None = ไล่เส้นตรง
+    curve: list[float] | None = None
 
     @property
     def duration(self) -> float:
@@ -103,6 +106,7 @@ class Lyrics:
                         timing=WordTimingSource(w.get("timing", "source")),
                         trailing_space=w.get("trailing_space", False),
                         emphasis=w.get("emphasis", False),
+                        curve=w.get("curve"),
                     )
                     for w in ln["words"]
                 ],

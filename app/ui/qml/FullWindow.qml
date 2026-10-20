@@ -255,7 +255,7 @@ Window {
         BarBtn { kind: "lyrics"; active: win.lyricsOn; tip: win.lyricsOn ? "ซ่อนเนื้อเพลง (ดูแต่ปก)" : "แสดงเนื้อเพลง"; onClicked: cfg.fw_lyrics_visible = !cfg.fw_lyrics_visible }
         BarBtn { kind: "settings"; tip: "ตั้งค่า"; onClicked: win.settingsRequested() }
         BarBtn { kind: win.fs ? "fullscreen_exit" : "fullscreen"; tip: win.fs ? "ออกจากเต็มจอ (Esc)" : "เต็มจอ (F)"; onClicked: cfg.fw_fullscreen = !cfg.fw_fullscreen }
-        BarBtn { kind: "close"; tip: "ปิดหน้าต่างโหมดเต็ม"; onClicked: { cfg.fw_fullscreen = false; cfg.fw_open = false } }
+        BarBtn { kind: "close"; tip: cfg.st_close_to_tray ? "ปิดหน้าต่างโหมดเต็ม (โปรแกรมยังทำงานที่ถาดระบบ)" : "ปิดโปรแกรม"; onClicked: win.close() }
     }
 
     // ---------- คีย์ลัด (เมื่อหน้าต่างนี้ถูกโฟกัส) ----------

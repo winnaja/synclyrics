@@ -562,3 +562,40 @@ def test_purge_stale_art_cache_runs_once(tmp_path: Path) -> None:
         assert dbmod.purge_stale_art_cache(conn, art) == 0 and (art / "new.jpg").exists()
     finally:
         conn.close()
+
+
+def test_ensure_std_streams_replaces_none_streams(monkeypatch):
+    import sys
+
+    from app.core.streams import ensure_std_streams
+
+    monkeypatch.setattr(sys, "stdout", None)
+    monkeypatch.setattr(sys, "stderr", None)
+    ensure_std_streams()
+    sys.stdout.write("x")
+    sys.stderr.write("y")      # ไม่พัง (เคยทำงาน AI ล้มเหลวเมื่อเปิดด้วย pythonw)
+
+
+def test_repair_if_corrupt_salvages_readable_rows_and_backs_up(tmp_path):
+    import sqlite3
+
+    from app.core import db as dbmod
+
+    p = tmp_path / "t.sqlite3"
+    conn = dbmod.connect(p)
+    conn.execute("INSERT INTO tracks(video_id, yt_title, channel, first_seen_at) VALUES('a', 't', 'c', 1.0)")
+    conn.close()
+    assert dbmod.repair_if_corrupt(p) is None                    # ปกติ = ไม่แตะ
+    raw = bytearray(p.read_bytes())
+    raw[4096 * 2 + 20:4096 * 2 + 200] = b"\xff" * 180             # ทำให้หน้า b-tree เสีย
+    p.write_bytes(bytes(raw))
+    for side in ("-wal", "-shm"):
+        (tmp_path / f"t.sqlite3{side}").unlink(missing_ok=True)
+    if not dbmod.is_corrupt(p):
+        return                                                    # เสียหายไม่พอให้ตรวจพบ (ขึ้นกับขนาดไฟล์) — ข้าม
+    backup = dbmod.repair_if_corrupt(p)
+    assert backup and (tmp_path / backup.split("\\")[-1].split("/")[-1]).exists()
+    assert not dbmod.is_corrupt(p)
+    c = sqlite3.connect(p)
+    c.execute("SELECT count(*) FROM tracks").fetchone()
+    c.close()

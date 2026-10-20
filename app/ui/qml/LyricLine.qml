@@ -177,7 +177,22 @@ Item {
                         var d = modelData.end - modelData.start
                         if (d <= 0.001 || root.hl === "word")
                             return root.lyricPos >= modelData.start ? 1 : 0
+                        var cv = modelData.curve
+                        if (cv && cv.length >= 4) return w.curveProg(cv, root.lyricPos)   // ร้องลากไม่เท่ากันในคำ: ตามตัวอักษรที่ร้องจริง
                         return Math.max(0, Math.min(1, (root.lyricPos - modelData.start) / d))
+                    }
+                    // เส้นโค้ง [t0,f0,t1,f1,...] -> สัดส่วนตัวอักษรที่ร้องแล้ว ณ เวลา t (เส้นตรงระหว่างจุด)
+                    function curveProg(cv, t) {
+                        var n = cv.length
+                        if (t <= cv[0]) return 0
+                        if (t >= cv[n - 2]) return Math.max(0, Math.min(1, cv[n - 1]))
+                        for (var i = 2; i < n; i += 2) {
+                            if (t < cv[i]) {
+                                var t0 = cv[i - 2], f0 = cv[i - 1], t1 = cv[i], f1 = cv[i + 1]
+                                return t1 > t0 ? f0 + (f1 - f0) * (t - t0) / (t1 - t0) : f1
+                            }
+                        }
+                        return 1
                     }
                     // คำเน้น: ลากเสียงยาว หรือถูกระบุ emphasis มา (เฟส 4: ตัวตรวจจับ/AI) — เรืองแสงตอนร้อง
                     readonly property bool emph: cfg.ov_emph_on && !root.still

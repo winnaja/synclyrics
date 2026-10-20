@@ -1,7 +1,7 @@
 # SyncLyrics — การตั้งค่าเริ่มต้น (ไฟล์นี้สร้างอัตโนมัติจาก app/core/config.py: Settings)
 # ห้ามแก้ไฟล์นี้ด้วยมือ — แก้ค่าเริ่มต้นในโค้ดแล้วรัน scripts/gen_default_settings.py
 # ค่าที่ผู้ใช้เปลี่ยนในหน้าตั้งค่าจะถูกเก็บที่ %LOCALAPPDATA%\SyncLyrics\settings.yaml
-version: 3
+version: 4
 lyrics_look:
   font_family: SF Thonburi
   font_fallbacks:
@@ -121,6 +121,7 @@ overlay:
   group_lines: true
   group_gap_s: 0.6
   auto_scroll: true
+  scroll_lead_s: 0.3
   resume_s: 3.0
   click_seek: true
   show_source: true
@@ -172,6 +173,13 @@ ai:
 lyrics_sources:
   enabled: {}
   allow_ai_transcribe: true
+  src_lrclib: true
+  src_lyrics_ovh: true
+  src_netease: true
+  src_qqmusic: true
+  src_youtube_subs: true
+  split_long_lines: true
+  max_line_width: 46
 playback:
   app_audio: false
   preload_at_percent: 50
@@ -206,7 +214,7 @@ automix:
 startup:
   launch_with_windows: false
   minimize_to_tray: true
-  close_to_tray: true
+  close_to_tray: false
   language: th
   open_browser: youtube
   extension_sends_current_video: true

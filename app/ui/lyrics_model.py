@@ -29,6 +29,7 @@ def word_to_dict(w: Word) -> dict[str, Any]:
         "estimated": w.timing == WordTimingSource.ESTIMATED,
         "trailingSpace": bool(w.trailing_space),
         "emphasis": bool(w.emphasis),
+        "curve": list(w.curve) if w.curve else [],
         "background": False,
         "spacer": False,
     }
@@ -307,8 +308,14 @@ def make_lyrics_model_class() -> type:
                 self.dataChanged.emit(idx, idx, [role_ids["words"]])
 
         # ---------- ค้นหา ----------
-        def line_index_at(self, position: float) -> int:
-            return find_line_index(self._starts, position)
+        def line_index_at(self, position: float, lead: float = 0.0) -> int:
+            """บรรทัดปัจจุบัน · lead > 0: ถ้าบรรทัดก่อนหน้าจบแล้ว (อยู่ในช่องว่าง) ให้ขึ้นบรรทัดถัดไปล่วงหน้า lead วินาที (เลื่อนจอให้ทันตอนเริ่มร้อง)"""
+            i = find_line_index(self._starts, position)
+            if lead > 0.0:
+                j = find_line_index(self._starts, position + lead)
+                if j > i and (i < 0 or position >= float(self._rows[i]["end"]) - 0.05):
+                    return j
+            return i
 
         def group_range(self, i: int, gap_s: float) -> tuple[int, int]:
             return group_range(self._rows, i, gap_s)

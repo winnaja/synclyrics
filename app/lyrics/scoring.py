@@ -146,3 +146,62 @@ def score_candidate(candidate: LyricsCandidate, meta: TrackMeta, duration: float
     candidate.score = total
     candidate.score_detail = detail
     return total
+
+
+# ---------------------------------------------------------------------------
+# ฉันทามติระหว่างแหล่ง (ผู้ใช้สั่ง 2026-10-21): เอาเนื้อเพลงของทุกแหล่งมาเทียบกัน อันที่ตรงกับแหล่งอื่นมากที่สุดคือฉบับที่น่าเชื่อถือที่สุด
+# ---------------------------------------------------------------------------
+CONSENSUS_WEIGHT = 25.0        # โบนัสสูงสุดที่ได้จากการตรงกับแหล่งอื่น (เพิ่มจากคะแนนปกติ)
+CONSENSUS_VOTER_MIN = 30.0     # แหล่งที่มีคะแนนต่ำกว่านี้ไม่มีสิทธิ์โหวต (น่าจะคนละเพลง)
+CONSENSUS_LINE_RATIO = 82      # บรรทัดสองฉบับนับว่า "ตรงกัน" เมื่อคล้ายกันเกินนี้ (rapidfuzz ratio)
+
+
+def _line_keys(candidate: LyricsCandidate) -> list[str]:
+    keys: list[str] = []
+    seen: set[str] = set()
+    for ln in candidate.lyrics.lines:
+        k = _norm("".join(w.text for w in ln.words))
+        if len(k) >= 3 and k not in seen:
+            seen.add(k)
+            keys.append(k)
+    return keys
+
+
+def _agreement(a: list[str], b: list[str]) -> float:
+    """สัดส่วนบรรทัดของ a ที่มีบรรทัดตรงกันใน b (0-1)"""
+    if not a or not b:
+        return 0.0
+    bset = set(b)
+    hit = 0
+    for x in a:
+        if x in bset or any(fuzz.ratio(x, y) >= CONSENSUS_LINE_RATIO for y in b):
+            hit += 1
+    return hit / len(a)
+
+
+def apply_consensus(candidates: list[LyricsCandidate]) -> None:
+    """เติมโบนัสฉันทามติลง candidate.score (เรียกซ้ำได้ ไม่บวกซ้ำ: เก็บคะแนนเดิมไว้ใน score_detail["base"])
+    ผู้โหวต = ผลที่คะแนนปกติ ≥ CONSENSUS_VOTER_MIN และมี ≥ 4 บรรทัด · ความเห็นถ่วงน้ำหนักด้วยคะแนนของผู้โหวต
+    ไม่มีผู้โหวตอื่นเลย = ไม่มีโบนัส (ไม่ลงโทษผลเดี่ยว)"""
+    keys = {id(c): _line_keys(c) for c in candidates}
+    for c in candidates:
+        c.score_detail.setdefault("base", c.score)
+    voters = [c for c in candidates if c.score_detail["base"] >= CONSENSUS_VOTER_MIN and len(keys[id(c)]) >= 4]
+    for c in candidates:
+        base = c.score_detail["base"]
+        ka = keys[id(c)]
+        if base <= 0 or len(ka) < 4:
+            c.score = base
+            continue
+        num = den = 0.0
+        for v in voters:
+            if v is c:
+                continue
+            kb = keys[id(v)]
+            sym = (_agreement(ka, kb) + _agreement(kb, ka)) / 2.0
+            w = max(0.2, v.score_detail["base"] / 100.0)
+            num += sym * w
+            den += w
+        consensus = num / den if den else 0.0
+        c.score_detail["consensus"] = round(consensus, 3)
+        c.score = base + CONSENSUS_WEIGHT * consensus if den else base

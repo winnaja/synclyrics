@@ -264,6 +264,7 @@ def _scenario() -> int:
         pump(0.1)
     sb.set_from_python("fw_font_scale", 1.5)
     pump(0.1)
+    sb.set_from_python("st_close_to_tray", True)
     full_win.close()  # ปุ่มปิดของหน้าต่าง = ซ่อน (ไม่ปิดโปรแกรม) และหน้าต่างลอยกลับมา
     pump(0.3)
     assert sb.cfg.value("fw_open") is False and full_win.property("visible") is False

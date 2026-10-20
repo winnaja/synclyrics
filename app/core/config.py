@@ -26,7 +26,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from app.core.paths import PROJECT_ROOT, AppPaths
 
 CURRENT_VERSIONS: dict[str, int] = {
-    "settings.yaml": 3,
+    "settings.yaml": 4,
     "models.yaml": 1,
     "automix_rules.yaml": 1,
     "selectors.json": 1,
@@ -76,6 +76,17 @@ def _settings_v2_to_v3(data: dict[str, Any]) -> dict[str, Any]:
 
 
 MIGRATORS["settings.yaml"][2] = _settings_v2_to_v3
+
+
+def _settings_v3_to_v4(data: dict[str, Any]) -> dict[str, Any]:
+    """v4 (2026-10-20): ปุ่มปิด (กากบาท) ปิดโปรแกรมจริงเป็นค่าเริ่มต้น (เดิมซ่อนลง tray แล้วโผล่หน้าต่างเล็ก ผู้ใช้งง) — ล้างค่าเดิมครั้งเดียว"""
+    for sec in (data.get("startup"),):
+        if isinstance(sec, dict):
+            sec.pop("close_to_tray", None)
+    return data
+
+
+MIGRATORS["settings.yaml"][3] = _settings_v3_to_v4
 
 
 class ConfigError(Exception):
@@ -232,6 +243,7 @@ class OverlaySettings(_Model):
     group_lines: bool = True                          # บรรทัดที่ร้องต่อเนื่องเป็นท่อนเดียวกัน ค้างความสว่างไว้แล้วจางพร้อมกันเมื่อจบท่อน
     group_gap_s: float = Field(0.6, ge=0.1, le=2.0)   # ช่องว่างสูงสุดระหว่างบรรทัดที่ยังนับเป็นท่อนเดียวกัน (ถ้าดูเป็นประโยคต่อ)
     auto_scroll: bool = True
+    scroll_lead_s: float = Field(0.3, ge=0.0, le=1.0)  # เริ่มเลื่อนไปบรรทัดถัดไปก่อนบรรทัดนั้นเริ่มร้องเท่านี้ (ให้เลื่อนถึงกลางจอพอดีตอนเริ่มร้อง ไม่หน่วง) — ใช้เมื่อบรรทัดก่อนหน้าจบแล้ว
     resume_s: float = Field(3.0, ge=1, le=15)       # เลื่อนอ่านเองแล้วกลับไปตามเพลงใน (วินาที)
     click_seek: bool = True                          # คลิกบรรทัดเพื่อกรอ YouTube ไปที่บรรทัดนั้น
     show_source: bool = True                         # แสดงป้ายแหล่งเนื้อเพลง
@@ -293,6 +305,14 @@ class LyricsSourceSettings(_Model):
     # ชื่อ plugin -> เปิด/ปิด (plugin ที่ไม่มีในนี้ใช้ค่า enabled_by_default ของมันเอง)
     enabled: dict[str, bool] = {}
     allow_ai_transcribe: bool = True
+    # เปิด/ปิดแหล่งเนื้อเพลงทีละแหล่ง (หน้าตั้งค่า > แหล่งเนื้อเพลง) · ปิดทั้งหมด = ไม่ค้นเว็บ ใช้ AI ถอดเสียงอย่างเดียว
+    src_lrclib: bool = True
+    src_lyrics_ovh: bool = True
+    src_netease: bool = True
+    src_qqmusic: bool = True
+    src_youtube_subs: bool = True
+    split_long_lines: bool = True                       # ตัดบรรทัดเนื้อเพลงที่ยาวเกินเป็นบรรทัดสั้น (ที่วรรคตอน/คำเชื่อม) แบบ Apple Music
+    max_line_width: int = Field(46, ge=20, le=120)      # ความกว้างสูงสุดของบรรทัด (ตัวอักษรกว้าง CJK นับ 2)
 
 
 class PlaybackSettings(_Model):
@@ -338,14 +358,14 @@ class AiSettings(_Model):
 class StartupSettings(_Model):
     launch_with_windows: bool = False
     minimize_to_tray: bool = True
-    close_to_tray: bool = True   # กดปิดหน้าต่างหลัก/ตั้งค่า = ซ่อนลง tray (False = ปิดโปรแกรม)
+    close_to_tray: bool = False  # กดปิดหน้าต่างหลัก/ตั้งค่า = ซ่อนลง tray (False = ปิดโปรแกรมจริง — ผู้ใช้คาดหวังแบบนี้ 2026-10-20)
     language: Literal["th", "en"] = "th"
     open_browser: Literal["youtube", "youtube_music", "none"] = "youtube"
     extension_sends_current_video: bool = True
 
 
 class Settings(_Model):
-    version: int = 3
+    version: int = 4
     lyrics_look: LyricsLook = LyricsLook()
     background: BackgroundSettings = BackgroundSettings()
     desktop_lyrics: DesktopLyricsSettings = DesktopLyricsSettings()
@@ -422,10 +442,13 @@ class AnalysisCfg(_Model):
     window_s: float = 30.0      # ขนาดช่วงที่ประมวลผลทีละครั้ง (ทยอยส่งผลทีละช่วง)
     context_s: float = 3.0      # ซ้อนหัวท้ายแต่ละช่วงให้ Demucs/Whisper เห็นบริบท
     min_coverage: float = 0.25  # จับคู่เนื้อเพลงกับเสียงได้น้อยกว่านี้ = เนื้อเพลงอาจเป็นคนละเวอร์ชัน
-    prefer_heard: bool = True        # แสดงตามเสียงที่ AI ได้ยินเป็นหลัก (เนื้อเพลงเว็บใช้แก้คำที่ตรงกัน) · False = ยึดเนื้อเพลงเว็บแล้วจัดเวลา
+    heard_extras: bool = True        # เก็บสิ่งที่ AI ได้ยินแต่ไม่มีในเนื้อเพลงเว็บ (คอรัส/ad-lib) เป็นแถวเสียงประสานตัวเล็ก
+    detect_backing: bool = True      # AI ตรวจบรรทัดเสียงประสาน/คอรัส (เบา/สะท้อนบรรทัดข้างเคียง) แสดงเป็นแถวเล็ก
+    prefer_heard: bool = False       # ยึดเนื้อเพลงเว็บเป็นหลัก แล้วให้ AI จัดเวลา (ผู้ใช้สั่ง 2026-10-20) · True = แสดงตามเสียงที่ AI ได้ยินแทน
     reconstruct_below: float = 0.5   # จับคู่ตามลำดับได้น้อยกว่านี้ ลองสร้างบรรทัดตามลำดับที่ร้องจริง (รีมิกซ์/โครงสร้างต่าง)
     reconstruct_gain: float = 0.08   # ใช้ผลที่สร้างตามเสียงจริงเมื่อจับคู่ข้อความได้มากกว่าแบบเรียงลำดับอย่างน้อยเท่านี้
-    algo_version: int = 1       # เปลี่ยนเมื่อวิธีจัดเวลาเปลี่ยน -> ผลที่เก็บไว้เก่าหมดอายุ
+    transcript_version: int = 2  # เปลี่ยนเมื่อวิธีแยกเสียง/ถอดเสียงเปลี่ยน -> ต้องฟังเสียงใหม่ (ไม่เกี่ยวกับ algo_version)
+    algo_version: int = 4       # เปลี่ยนเมื่อวิธีจัดเวลาเปลี่ยน -> ผลที่เก็บไว้เก่าหมดอายุ
 
 
 class ModelsConfig(_Model):

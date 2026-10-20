@@ -20,7 +20,8 @@ from pydantic import BaseModel, ValidationError
 from app.core.config import Settings
 from app.ui import anim_presets, themes
 
-GROUPS: dict[str, str] = {"ov": "overlay", "fw": "fullwindow", "look": "lyrics_look", "hk": "hotkeys", "st": "startup", "ai": "ai"}
+GROUPS: dict[str, str] = {"ov": "overlay", "fw": "fullwindow", "look": "lyrics_look", "hk": "hotkeys", "st": "startup", "ai": "ai",
+                          "ls": "lyrics_sources"}
 # คีย์ที่ไม่ควรให้ธีมเปลี่ยนเป็น custom เมื่อถูกเขียน (ตำแหน่ง/สถานะหน้าต่าง ฯลฯ ไม่ใช่เรื่องหน้าตา)
 _NON_APPEARANCE = {"blur_behind", "anim_preset", "mode", "visible", "start_position", "monitor", "window_opacity", "weight_boost", "always_on_top", "locked", "click_through", "remember_position", "x", "y",
                    "w_minimal", "h_minimal", "w_focus", "h_focus", "w_full", "h_full", "theme", "show_translation",
@@ -72,6 +73,8 @@ class SettingsStore:
         out: dict[str, Any] = {}
         for prefix in GROUPS:
             for name, value in self._model(prefix).model_dump().items():
+                if isinstance(value, dict):      # (เช่น ls_enabled) QML ไม่ได้ใช้ · แผนที่ซ้อนทำให้ค่าเปรียบเทียบยุ่ง
+                    continue
                 out[f"{prefix}_{name}"] = "" if value is None else value
         return out
 
@@ -170,9 +173,11 @@ class SettingsStore:
             return ov("highlight", "auto_scroll", "resume_s", "click_seek", "show_source", "show_translation", "translation_size") + ["look_show_romanization"]
         if page == "anim":
             return sorted(set(anim_presets.OWNED_KEYS) | set(ov("anim_preset", "animation", "animation_intensity", "reduced_motion", "word_anim", "word_ease",
-                          "word_anim_ms", "word_scale", "word_stay", "glow_strength", "glow_color", "word_hold_ms", "word_release_ms", "lift_px", "emph_on", "emph_min_s", "emph_glow", "emph_scale")))
+                          "scroll_lead_s", "word_anim_ms", "word_scale", "word_stay", "glow_strength", "glow_color", "word_hold_ms", "word_release_ms", "lift_px", "emph_on", "emph_min_s", "emph_glow", "emph_scale")))
         if page == "hotkeys":
             return [k for k in flat if k.startswith("hk_")]
+        if page == "sources":
+            return [k for k in flat if k.startswith("ls_")]
         if page == "ai":
             return [k for k in flat if k.startswith("ai_")]
         return []

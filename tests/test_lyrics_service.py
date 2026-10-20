@@ -167,3 +167,32 @@ def test_pick_subtitle_prefers_language_and_vtt() -> None:
             "live_chat": [{"ext": "json", "url": "chat"}]}
     assert pick_subtitle_url(subs) == ("th", "u-th")
     assert pick_subtitle_url({}) is None
+
+
+def _timed_line(text, t0=0.0, per=0.4):
+    from app.core.models import Line, Word, WordTimingSource
+
+    words = [Word(w, t0 + i * per, t0 + (i + 1) * per, timing=WordTimingSource.ESTIMATED, trailing_space=(i < len(text.split()) - 1))
+             for i, w in enumerate(text.split())]
+    return Line(start=words[0].start, end=words[-1].end, words=words)
+
+
+def test_split_line_cuts_long_line_at_conjunction_and_keeps_word_times():
+    from app.lyrics.linebreak import split_line
+
+    ln = _timed_line("You know all that's fake and God knows why I need you")
+    parts = split_line(ln, 30)
+    assert len(parts) >= 2
+    assert parts[0].text.endswith("fake") and parts[1].text.startswith("and")
+    assert sum(len(p.words) for p in parts) == len(ln.words)
+    assert parts[0].end <= parts[1].start + 1e-9 and parts[1].start == ln.words[len(parts[0].words)].start
+
+
+def test_split_line_leaves_short_lines_and_lines_with_translation_alone():
+    from app.lyrics.linebreak import split_line
+
+    short = _timed_line("I wish I was special")
+    assert split_line(short, 30) == [short]
+    long_tr = _timed_line("You know all that's fake and God knows why I need you")
+    long_tr.translation = "คำแปล"
+    assert split_line(long_tr, 30) == [long_tr]

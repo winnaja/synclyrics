@@ -55,3 +55,72 @@ def test_query_gpu_never_raises():
 
     info = query_gpu()
     assert info is None or (isinstance(info, GpuInfo) and info.vram_total_mb > 0)
+
+
+def test_snap_words_to_voice_moves_start_to_real_onset_and_trims_trailing_silence():
+    import numpy as np
+
+    from app.ai.pipeline.vocal_activity import snap_words_to_voice
+
+    sr = 16000
+    x = np.zeros(sr * 4, dtype=np.float32)
+    t = np.arange(sr) / sr
+    x[int(1.5 * sr):int(2.5 * sr)] = 0.3 * np.sin(2 * np.pi * 220 * t)       # ร้องจริง 1.5-2.5 วิ
+    out = snap_words_to_voice([[1.0, 3.0, 1.0]], x, sr)                      # Whisper ให้คำนี้ 1.0-3.0 (ทั้งหน้า/หลังเป็นความเงียบ)
+    assert 1.45 <= out[0][0] <= 1.6 and 2.45 <= out[0][1] <= 2.7
+    same = snap_words_to_voice([[1.6, 2.4, 1.0]], x, sr)                     # เริ่มตอนร้องอยู่แล้ว = ไม่ขยับ
+    assert abs(same[0][0] - 1.6) < 1e-6
+
+
+def test_snap_line_onset_moves_first_word_to_voice_return_after_a_dip():
+    import numpy as np
+
+    from app.ai.pipeline.vocal_activity import snap_line_onset
+
+    sr = 16000
+    t = np.arange(sr * 2) / sr
+    tone = 0.3 * np.sin(2 * np.pi * 220 * t).astype(np.float32)
+    x = np.zeros(sr * 4, dtype=np.float32)
+    x[int(0.5 * sr):int(1.5 * sr)] = tone[:sr]            # หางเสียงของบรรทัดก่อนหน้า
+    x[int(2.0 * sr):int(3.0 * sr)] = tone[:sr]            # เสียงร้องบรรทัดนี้เริ่มจริงที่ 2.0
+    out = snap_line_onset([[1.2, 2.6, 1.0], [2.6, 3.0, 1.0]], x, sr)   # Whisper ลากคำแรกย้อนไปที่ 1.2
+    assert 1.95 <= out[0][0] <= 2.1
+    assert out[1][0] >= out[0][1] - 1e-9                   # คำถัดไปไม่ซ้อน
+    quiet = snap_line_onset([[0.6, 1.2, 1.0]], x, sr)      # ร้องต่อเนื่องไม่มี dip = ไม่ขยับ
+    assert abs(quiet[0][0] - 0.6) < 1e-9
+
+
+def test_compact_line_outliers_moves_stray_first_word_next_to_the_rest_of_the_line():
+    from app.ai.pipeline.vocal_activity import compact_line_outliers
+
+    line = [[37.3, 37.5, 1.0], [40.2, 40.6, 1.0], [40.7, 41.0, 1.0], [41.1, 41.3, 1.0], [41.4, 42.0, 1.0]]
+    out = compact_line_outliers(line)
+    assert out[0][1] <= out[1][0] and out[1][0] - out[0][1] < 0.1 and out[0][0] > 39.0
+    tight = [[1.0, 1.4, 1.0], [1.5, 1.9, 1.0], [2.0, 2.4, 1.0]]
+    assert compact_line_outliers(tight) == tight                      # ไม่มีช่องว่างผิดปกติ = ไม่แตะ
+
+
+def test_classify_backing_flags_quiet_short_lines_and_echoes():
+    import numpy as np
+
+    from app.ai.pipeline.vocal_activity import classify_backing
+
+    sr = 16000
+    x = np.zeros(sr * 60, dtype=np.float32)
+    t = np.arange(sr * 2) / sr
+    lines = []
+    for i in range(10):
+        a = 3.0 + i * 5.0
+        amp = 0.02 if i == 4 else 0.3                  # บรรทัดที่ 4 เบามาก (คอรัส)
+        x[int(a * sr):int(a * sr) + sr * 2] = amp * np.sin(2 * np.pi * 220 * t).astype(np.float32)
+        lines.append({"start": a, "end": a + 2.0, "words": ["I", "watch", "you"] if i == 4 else ["Lead", "line", "number", str(i)]})
+    flags = classify_backing(lines, x, sr)
+    assert flags[4] and not any(f for k, f in enumerate(flags) if k != 4)
+    assert classify_backing(lines[:5], x, sr) == [False] * 5   # เพลงมีบรรทัดน้อยไม่ตัดสิน
+
+
+def test_remap_curves_stretches_curve_to_new_word_span():
+    from app.ai.pipeline.vocal_activity import remap_curves
+
+    out = remap_curves([[1.0, 0.0, 1.5, 0.5, 2.0, 1.0], None], [[1.0, 2.0, 1.0], [3.0, 4.0, 1.0]], [[1.5, 2.5, 1.0], [3.0, 4.0, 1.0]])
+    assert out[0][0] == 1.5 and out[0][-2] == 2.5 and abs(out[0][2] - 2.0) < 1e-6 and out[1] is None

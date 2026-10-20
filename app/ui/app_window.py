@@ -446,7 +446,9 @@ def make_bridge_classes() -> tuple[type, type]:
 
                 from app.ui.lyrics_model import edge_gaps
 
-                gaps = [(float(a), float(b)) for a, b in (p.get("gaps") or [])] or None
+                # gaps ที่ AI ส่งมา: [] = ฟังแล้ว "ไม่มีช่วงดนตรีเลย" (เช่นแร็พ/ดูเอ็ตร้องต่อเนื่อง) ต้องไม่ใช้ช่องว่างจากเวลาเนื้อเพลงมาแสดงจุดทับตอนมีคนร้องอยู่
+                # ไม่มีคีย์ gaps = ผลชั่วคราวระหว่างฟัง (ยังไม่รู้) ก็ไม่แสดงจุดเช่นกัน
+                gaps = [(float(a), float(b)) for a, b in (p.get("gaps") or [])]
                 self._model.retime(lyrics, gaps)
                 intro, outro = edge_gaps(lyrics, gaps, float(getattr(lyrics, "duration", 0.0) or 0.0))
                 self._set_edge_gaps(intro, outro)
@@ -553,6 +555,11 @@ def make_bridge_classes() -> tuple[type, type]:
         def lineIndexAt(self, position: float) -> int:
             """index ของบรรทัดปัจจุบัน (bisect) -1 = ยังไม่ถึงบรรทัดแรก"""
             return int(self._model.line_index_at(position))
+
+        @Slot(float, float, result=int)
+        def lineIndexAtLead(self, position: float, lead: float) -> int:
+            """เหมือน lineIndexAt แต่ขึ้นบรรทัดถัดไปล่วงหน้า lead วินาทีเมื่อบรรทัดก่อนหน้าจบแล้ว"""
+            return int(self._model.line_index_at(position, lead))
 
     _BRIDGES = (PlayerBridge, ClockBridge)
     return _BRIDGES

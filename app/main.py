@@ -72,6 +72,9 @@ def _setup_core(opts: LaunchOptions) -> Any:
         log.warning("config", extra={"data": {"warning": w}})
     if settings.overlay.mode == "full":  # ค่าเก่า: โหมดเต็มตอนนี้เป็นหน้าต่างแยก (fullwindow)
         settings.overlay.mode = "focus"
+    backup = dbmod.repair_if_corrupt(paths.db_file)   # ฐานข้อมูลเสียหาย (ดิสก์เต็ม/ปิดเครื่องกลางคัน): สำรอง + กู้เท่าที่ได้ ไม่ให้โปรแกรมพัง
+    if backup:
+        log.warning("ฐานข้อมูลเสียหาย: สำรองไว้แล้วกู้ข้อมูลเท่าที่ได้", extra={"data": {"backup": backup}})
     conn = dbmod.connect(paths.db_file)  # รัน migration ครั้งเดียวก่อนทุก thread
     try:
         if dbmod.purge_stale_companion_cache(conn):
@@ -104,6 +107,9 @@ def _start_engine(core: Any) -> Any:
 
 def main(argv: list[str] | None = None) -> int:
     """ประกอบทุกส่วนตามลำดับที่ปลอดภัย (ดูด้านบน) ส่วนที่พังข้ามอย่างปลอดภัย"""
+    from app.core.streams import ensure_std_streams
+
+    ensure_std_streams()   # เปิดด้วย pythonw (ไม่มีคอนโซล) sys.stdout/stderr เป็น None
     args = sys.argv[1:] if argv is None else argv
     opts = parse_args(args)
     opts.safe_mode = opts.safe_mode or shift_held()

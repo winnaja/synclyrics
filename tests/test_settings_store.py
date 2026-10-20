@@ -18,7 +18,7 @@ def test_flat_has_all_groups_and_none_becomes_empty_string() -> None:
     st, _ = make()
     flat = st.flat()
     assert flat["ov_mode"] == "focus" and flat["look_font_size"] == 44 and flat["hk_show_hide"] == "Ctrl+Alt+L"
-    assert flat["st_close_to_tray"] is True
+    assert flat["st_close_to_tray"] is False       # ค่าเริ่มต้น: ปุ่มปิด = ปิดโปรแกรมจริง
     assert flat["ov_x"] == ""  # None -> "" (QML ไม่มี null ในแผนที่ค่า)
 
 

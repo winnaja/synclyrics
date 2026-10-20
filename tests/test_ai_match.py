@@ -186,3 +186,71 @@ def test_known_whisper_credit_hallucinations_are_detected():
 
     assert is_hallucination("优独播剧场——YoYo Television Series Exclusive") and is_hallucination("Thank you for watching!")
     assert not is_hallucination("I got you moonlight you're my starlight") and not is_hallucination("ฉันยังรอเธอ")
+
+
+def test_fill_missing_lines_places_unheard_lyric_lines_in_voiced_gap_between_anchors():
+    from app.ai.pipeline.match import InLine, ReLine, ReResult, fill_missing_lines
+
+    lines = [InLine(words=["aaaa"]), InLine(words=["bbbbbbbb"]), InLine(words=["cccc"])]
+    res = ReResult(lines=[ReLine(0.0, 2.0, [(0.0, 2.0, 1.0)], ["aaaa"], [0]), ReLine(10.0, 12.0, [(10.0, 12.0, 1.0)], ["cccc"], [2])], coverage=0.6)
+    out = fill_missing_lines(res, lines, [(0.0, 12.0)], 12.0)
+    mid = [r for r in out.lines if r.src == [1]]
+    assert len(mid) == 1 and 2.0 <= mid[0].start < mid[0].end <= 10.0
+    assert [r.start for r in out.lines] == sorted(r.start for r in out.lines)
+    # เสียงร้องไม่มีในช่วงนั้น (ดนตรีล้วน) = ไม่เติม
+    assert len(fill_missing_lines(res, lines, [(0.0, 2.0), (10.0, 12.0)], 12.0).lines) == 2
+
+
+def test_tidy_lines_drops_duplicate_overlapping_line_and_trims_time_overlap():
+    from app.ai.pipeline.match import ReLine, tidy_lines
+
+    a = ReLine(10.0, 12.0, [(10.0, 12.0, 1.0)], ["God", "knows", "why", "I", "need", "you"], [79, 80])
+    dup = ReLine(10.4, 11.5, [(10.4, 11.5, 1.0)], ["why", "I", "need", "you"], [79])
+    nxt = ReLine(11.8, 13.0, [(11.8, 13.0, 1.0)], ["something", "else"], [81])
+    out = tidy_lines([nxt, dup, a])
+    assert [r.src for r in out] == [[79, 80], [81]]
+    assert out[0].end <= out[1].start + 1e-9                    # เวลาไม่ทับกัน
+
+
+def test_retime_unresolved_uses_web_time_plus_median_delta_of_neighbours():
+    from app.ai.pipeline.match import InLine, retime_unresolved
+
+    lines = [InLine(words=["a"], start=10.0, end=12.0), InLine(words=["b", "c"], start=15.0, end=17.0), InLine(words=["d"], start=20.0, end=22.0)]
+    out = [{"i": 0, "resolved": True, "words": [[10.6, 11.0, 1.0]], "start": 10.6, "end": 11.0},
+           {"i": 1, "resolved": False, "words": [[1.0, 2.0, 0.0], [2.0, 3.0, 0.0]], "start": 1.0, "end": 3.0},
+           {"i": 2, "resolved": True, "words": [[20.7, 21.0, 1.0]], "start": 20.7, "end": 21.0}]
+    retime_unresolved(out, lines)
+    assert abs(out[1]["start"] - 15.65) < 0.1 and out[1]["end"] > out[1]["start"]
+
+
+def test_heard_extras_collects_uncovered_confident_words_as_background_lines():
+    from app.ai.pipeline.match import InLine, TWord, heard_extras
+
+    lines = [InLine(words=["main", "lead", "line"]), InLine(words=["another", "lead", "line"])]
+    out = [{"i": 0, "start": 10.0, "end": 12.0, "words": [[10.0, 12.0, 1.0]], "resolved": True},
+           {"i": 1, "start": 20.0, "end": 22.0, "words": [[20.0, 22.0, 1.0]], "resolved": True}]
+    tr = [TWord("main", 10.0, 10.5, 0.9), TWord("lead", 10.6, 11.0, 0.9), TWord("line", 11.1, 12.0, 0.9),
+          TWord("ooh", 15.0, 15.3, 0.9), TWord("la", 15.4, 15.7, 0.9), TWord("la", 15.8, 16.1, 0.9),    # คอรัสที่ไม่มีในเว็บ
+          TWord("blah", 30.0, 30.4, 0.2)]                                                                  # มั่นใจต่ำ = ทิ้ง
+    ex = heard_extras(out, lines, tr)
+    assert len(ex) == 1 and ex[0]["voice"] == "background" and ex[0]["extra"] and 15.0 <= ex[0]["start"] < 16.2
+
+
+def test_heard_extras_skips_word_that_belongs_to_neighbouring_lyric_line():
+    from app.ai.pipeline.match import InLine, TWord, heard_extras
+
+    lines = [InLine(words=["That", "someday", "it", "would", "lead", "me", "back", "to", "you"])]
+    out = [{"i": 0, "start": 55.0, "end": 58.0, "words": [[55.0, 58.0, 1.0]], "resolved": True}]
+    tr = [TWord("That", 53.8, 54.3, 0.95), TWord("that", 55.0, 55.3, 0.9)]
+    assert heard_extras(out, lines, tr) == []
+
+
+def test_heard_extras_keeps_single_word_adlib_but_drops_short_stray_word():
+    from app.ai.pipeline.match import InLine, TWord, heard_extras
+
+    lines = [InLine(words=["some", "lead", "words", "here"]), InLine(words=["more", "lead", "words", "there"])]
+    out = [{"i": 0, "start": 10.0, "end": 12.0, "words": [[10.0, 12.0, 1.0]], "resolved": True},
+           {"i": 1, "start": 30.0, "end": 32.0, "words": [[30.0, 32.0, 1.0]], "resolved": True}]
+    tr = [TWord("yeah", 20.0, 20.6, 0.9), TWord("then", 25.0, 25.3, 0.9)]
+    ex = heard_extras(out, lines, tr)
+    assert [e["text_words"] for e in ex] == [["yeah"]]

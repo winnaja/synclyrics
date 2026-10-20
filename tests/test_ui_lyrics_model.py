@@ -40,7 +40,7 @@ def test_rows_basic_fields() -> None:
 def test_word_dict_flags() -> None:
     w = Word("a", 0.0, 1.0, timing=WordTimingSource.ESTIMATED, trailing_space=True)
     d = word_to_dict(w)
-    assert d == {"text": "a", "start": 0.0, "end": 1.0, "estimated": True, "trailingSpace": True, "emphasis": False, "background": False, "spacer": False}
+    assert d == {"text": "a", "start": 0.0, "end": 1.0, "estimated": True, "trailingSpace": True, "emphasis": False, "curve": [], "background": False, "spacer": False}
     assert word_to_dict(Word("b", 0, 1))["estimated"] is False
     assert word_to_dict(Word("c", 0, 1, emphasis=True))["emphasis"] is True
 
@@ -122,3 +122,36 @@ def test_parenthesized_words_become_background_row_below_main_words():
     # วงเล็บอยู่หน้าบรรทัด: คำในวงเล็บแยกลงล่าง
     pre = split_background([Word("(Without", 0, 1, trailing_space=True), Word("love)", 1, 2, trailing_space=True), Word("Without", 2, 3)])
     assert [d["text"] for d in pre] == ["Without", "", "Without", "love"] or [d["text"] for d in pre][0] == "Without"
+
+
+def test_empty_vocal_gaps_means_no_instrumental_dots_even_with_timing_holes():
+    from app.core.models import Line, Lyrics, TimingLevel, Word
+    from app.ui.lyrics_model import lyrics_to_rows
+
+    lyr = Lyrics(lines=[Line(start=0.0, end=2.0, words=[Word("a", 0.0, 2.0)]), Line(start=10.0, end=12.0, words=[Word("b", 10.0, 12.0)])], timing=TimingLevel.LINE, source="t")
+    assert lyrics_to_rows(lyr, None)[0]["gapAfter"] > 0           # ไม่มีข้อมูลจาก AI: ใช้ช่องว่างจากเวลาเนื้อเพลง
+    assert lyrics_to_rows(lyr, [])[0]["gapAfter"] == 0.0          # AI ฟังแล้วร้องต่อเนื่อง: ไม่แสดงจุด
+
+
+def test_line_index_at_lead_advances_only_when_previous_line_has_finished():
+    from PySide6.QtCore import QCoreApplication  # noqa: F401  (ต้องมี Qt ให้ import โมเดล)
+    from app.core.models import Line, Lyrics, TimingLevel, Word
+    from app.ui.lyrics_model import lyrics_to_rows
+
+    lyr = Lyrics(lines=[Line(start=0.0, end=2.0, words=[Word("a", 0.0, 2.0)]), Line(start=2.5, end=4.0, words=[Word("b", 2.5, 4.0)]),
+                        Line(start=4.0, end=6.0, words=[Word("c", 4.0, 6.0)])], timing=TimingLevel.WORD, source="t")
+    rows = lyrics_to_rows(lyr)
+    starts = [r["start"] for r in rows]
+    from app.ui.lyrics_model import find_line_index
+
+    def at(pos, lead):  # สูตรเดียวกับ LyricsModel.line_index_at
+        i = find_line_index(starts, pos)
+        if lead > 0:
+            j = find_line_index(starts, pos + lead)
+            if j > i and (i < 0 or pos >= float(rows[i]["end"]) - 0.05):
+                return j
+        return i
+
+    assert at(2.3, 0.3) == 1      # บรรทัดแรกจบที่ 2.0 แล้ว: ขึ้นบรรทัดสองล่วงหน้า 0.2 วิ
+    assert at(1.9, 0.3) == 0      # บรรทัดแรกยังร้องอยู่ ไม่ตัดก่อนจบ
+    assert at(3.8, 0.3) == 1      # ติดกันไม่มีช่องว่าง: เปลี่ยนตามเวลาจริง

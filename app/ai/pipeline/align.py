@@ -22,6 +22,17 @@ _LATIN_RE = re.compile(r"[^a-z']")
 _UROMAN_LANG = {"th": "tha", "ja": "jpn", "ko": "kor", "zh": "zho", "yue": "yue", "ru": "rus", "hi": "hin", "ar": "ara"}
 
 
+class Span(tuple):
+    """(start, end, confidence) ที่พก .curve ไปด้วย (เส้นโค้งการร้องในคำ) — unpack/index เป็น tuple สามตัวตามเดิม"""
+
+    curve: list[float] | None = None
+
+    def __new__(cls, start: float, end: float, conf: float, curve: list[float] | None = None) -> "Span":
+        obj = super().__new__(cls, (start, end, conf))
+        obj.curve = curve
+        return obj
+
+
 def _needs_uroman(word: str) -> bool:
     """มีตัวอักษรนอกชุดละติน (ไทย/ญี่ปุ่น/เกาหลี/จีน/ซีริลลิก ...) ที่ต้องแปลงก่อน align"""
     return any(ord(c) > 0x24F and c.isalpha() and not (0x1E00 <= ord(c) <= 0x1EFF) for c in word)
@@ -113,8 +124,25 @@ def align_line(bundle: dict[str, Any], vocals16: np.ndarray, line_start: float, 
         s = t0 + group[0].start * sec_per_frame
         e = t0 + group[-1].end * sec_per_frame
         conf = float(sum(sp.score for sp in group) / len(group))
-        out.append((s, max(e, s + 0.04), conf))
+        e = max(e, s + 0.04)
+        out.append(Span(s, e, conf, _curve(group, t0, sec_per_frame, s, e)))
     return _fill_gaps(out, line_start, line_end)
+
+
+def _curve(group: list[Any], t0: float, sec_per_frame: float, word_start: float, word_end: float) -> list[float] | None:
+    """token ของคำหนึ่ง -> [t0, f0, t1, f1, ...] ความคืบหน้า (สัดส่วนตัวอักษร) ตามเวลา · ตัวอักษรเดียว/สั้นเกินไป = None (ไล่เส้นตรง)"""
+    n = len(group)
+    if n < 3 or word_end - word_start < 0.25:
+        return None
+    pts: list[float] = []
+    last_t = word_start
+    for j, sp in enumerate(group):
+        ts = max(last_t, t0 + sp.start * sec_per_frame)
+        te = max(ts, t0 + sp.end * sec_per_frame)
+        pts += [round(ts, 3), j / n, round(te, 3), (j + 1) / n]
+        last_t = te
+    pts[0], pts[-2] = word_start, word_end          # ปลายโค้งตรงกับเวลาเริ่ม/จบคำ
+    return pts
 
 
 def _fill_gaps(spans: list[tuple[float, float, float] | None], line_start: float, line_end: float) -> list[tuple[float, float, float]] | None:

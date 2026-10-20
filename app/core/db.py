@@ -225,6 +225,74 @@ def connect(path: Path | str) -> sqlite3.Connection:
     return conn
 
 
+def is_corrupt(path: Path | str) -> bool:
+    """ไฟล์ฐานข้อมูลเสียหายไหม (เช่น ดิสก์เต็มตอนเขียน/ปิดเครื่องกลางคัน) — ไม่มีไฟล์ = ไม่เสีย"""
+    if not Path(path).exists():
+        return False
+    try:
+        c = sqlite3.connect(f"file:{Path(path).as_posix()}?mode=ro", uri=True, timeout=5.0)
+        try:
+            ok = c.execute("PRAGMA quick_check").fetchall()
+        finally:
+            c.close()
+        return not (len(ok) == 1 and ok[0][0] == "ok")
+    except sqlite3.OperationalError as e:
+        # ล็อก/เปิดไม่ได้ชั่วคราว (แอปอีกตัวกำลังเขียน) ไม่ใช่ไฟล์เสีย — ห้ามไปสำรอง/แทนที่ไฟล์
+        msg = str(e).lower()
+        return "malformed" in msg or "not a database" in msg or "corrupt" in msg
+    except sqlite3.DatabaseError:
+        return True
+
+
+def repair_if_corrupt(path: Path | str) -> str | None:
+    """ถ้าฐานข้อมูลเสียหาย: สำรองไฟล์เดิมไว้ (.corrupt-<เวลา>) แล้วสร้างไฟล์ใหม่ + กู้ข้อมูลเท่าที่อ่านได้ทีละตาราง
+    คืนที่อยู่ไฟล์สำรอง (None = ปกติ) — ข้อมูลส่วนใหญ่เป็น cache (เนื้อเพลง/ผล AI) สร้างใหม่ได้"""
+    import shutil
+    import time
+
+    path = Path(path)
+    if not is_corrupt(path):
+        return None
+    backup = path.with_name(f"{path.name}.corrupt-{int(time.time())}")
+    shutil.copy2(path, backup)
+    for suffix in ("-wal", "-shm"):
+        side = Path(str(path) + suffix)
+        if side.exists():
+            shutil.copy2(side, Path(str(backup) + suffix))
+    fresh = path.with_name(path.name + ".new")
+    for f in (fresh, Path(str(fresh) + "-wal"), Path(str(fresh) + "-shm")):
+        f.unlink(missing_ok=True)
+    conn = connect(fresh)
+    try:
+        conn.execute("ATTACH DATABASE ? AS old", (str(backup),))
+        tables = [r[0] for r in conn.execute("SELECT name FROM main.sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")]
+        conn.execute("PRAGMA foreign_keys=OFF")
+        for t in tables:
+            try:
+                conn.execute(f'INSERT OR IGNORE INTO main."{t}" SELECT * FROM old."{t}"')
+            except sqlite3.DatabaseError:
+                # ตารางเสียบางหน้า: กู้ทีละแถวตาม rowid เท่าที่อ่านได้
+                try:
+                    ids = [r[0] for r in conn.execute(f'SELECT rowid FROM old."{t}"')]
+                except sqlite3.DatabaseError:
+                    ids = []
+                for i in ids:
+                    try:
+                        conn.execute(f'INSERT OR IGNORE INTO main."{t}" SELECT * FROM old."{t}" WHERE rowid=?', (i,))
+                    except sqlite3.DatabaseError:
+                        pass
+        conn.execute("DETACH DATABASE old")
+    finally:
+        conn.close()
+    for suffix in ("", "-wal", "-shm"):
+        Path(str(path) + suffix).unlink(missing_ok=True)
+    fresh.replace(path)
+    for suffix in ("-wal", "-shm"):
+        Path(str(fresh) + suffix).unlink(missing_ok=True)
+    return str(backup)
+
+
+
 def migrate(conn: sqlite3.Connection) -> int:
     """รัน migration ที่ยังไม่ได้รัน คืน user_version หลังรัน"""
     current = conn.execute("PRAGMA user_version").fetchone()[0]
