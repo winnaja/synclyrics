@@ -26,7 +26,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from app.core.paths import PROJECT_ROOT, AppPaths
 
 CURRENT_VERSIONS: dict[str, int] = {
-    "settings.yaml": 4,
+    "settings.yaml": 5,
     "models.yaml": 1,
     "automix_rules.yaml": 1,
     "selectors.json": 1,
@@ -87,6 +87,17 @@ def _settings_v3_to_v4(data: dict[str, Any]) -> dict[str, Any]:
 
 
 MIGRATORS["settings.yaml"][3] = _settings_v3_to_v4
+
+
+def _settings_v4_to_v5(data: dict[str, Any]) -> dict[str, Any]:
+    """v5 (2026-10-21): คำเน้นเปิดเป็นค่าเริ่มต้น (AI เลือกคำเน้น) — ล้างค่า emph_on เดิมที่บันทึกไว้ (เคยปิด) ครั้งเดียว"""
+    ov = data.get("overlay")
+    if isinstance(ov, dict):
+        ov.pop("emph_on", None)
+    return data
+
+
+MIGRATORS["settings.yaml"][4] = _settings_v4_to_v5
 
 
 class ConfigError(Exception):
@@ -236,7 +247,7 @@ class OverlaySettings(_Model):
     word_hold_ms: int = Field(250, ge=0, le=2000)     # ร้องคำนั้นจบแล้วค้างสถานะ "ลอย/เรืองแสง" ต่ออีกกี่ ms ก่อนเริ่มคืน
     word_release_ms: int = Field(700, ge=0, le=3000)  # ใช้เวลาคืนกลับ (ลอยลง/แสงค่อยๆ ลด) กี่ ms
     # คำเน้น (แบบ Apple Music): คำที่ลากเสียงยาว (หรือที่ตัวตรวจจับ/AI ในเฟส 4 ระบุ emphasis) เรืองแสง+ขยายตอนร้อง
-    emph_on: bool = False   # คำเน้น (เรืองแสง+ขยาย) ปิดไว้ตามคลิปอ้างอิง — เปิดเองได้ที่ตั้งค่า > แอนิเมชัน
+    emph_on: bool = True    # คำเน้น (เรืองแสง+ขยาย) ที่ AI เลือก (ผู้ใช้สั่ง 2026-10-21) — ปิดได้ที่ตั้งค่า > แอนิเมชัน
     emph_min_s: float = Field(1.2, ge=0.4, le=4.0)    # คำที่ยาวตั้งแต่กี่วินาทีถือเป็นคำเน้น
     emph_glow: float = Field(0.9, ge=0, le=1)
     emph_scale: float = Field(1.08, ge=1.0, le=1.3)
@@ -365,7 +376,7 @@ class StartupSettings(_Model):
 
 
 class Settings(_Model):
-    version: int = 4
+    version: int = 5
     lyrics_look: LyricsLook = LyricsLook()
     background: BackgroundSettings = BackgroundSettings()
     desktop_lyrics: DesktopLyricsSettings = DesktopLyricsSettings()
@@ -433,6 +444,14 @@ class TranslateCfg(_Model):
     keep_loaded: bool = False
 
 
+class EmphasisCfg(_Model):
+    """เลือกคำเน้นด้วยโมเดลภาษาในเครื่อง (ผู้ใช้สั่ง 2026-10-21) — โหลดครั้งแรก ~4 GB ไป <model_dir>/llm/<local_name>"""
+
+    enabled: bool = True
+    model: str = "jncraton/Qwen3-4B-Instruct-2507-ct2-int8"
+    local_name: str = "qwen3-4b-instruct-2507-ct2-int8"
+
+
 class AnalysisCfg(_Model):
     """การวิเคราะห์เสียงเบื้องหลังเพื่อจัดเวลาเนื้อเพลง (แอปไม่เล่นเสียงเอง — โหลดเสียงมาวิเคราะห์อย่างเดียว)"""
 
@@ -469,6 +488,7 @@ class ModelsConfig(_Model):
     beats: BeatsCfg = BeatsCfg()
     progressive: ProgressiveCfg = ProgressiveCfg()
     translate: TranslateCfg = TranslateCfg()
+    emphasis: EmphasisCfg = EmphasisCfg()
     analysis: AnalysisCfg = AnalysisCfg()
 
     @model_validator(mode="before")

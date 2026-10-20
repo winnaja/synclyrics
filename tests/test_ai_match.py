@@ -254,3 +254,16 @@ def test_heard_extras_keeps_single_word_adlib_but_drops_short_stray_word():
     tr = [TWord("yeah", 20.0, 20.6, 0.9), TWord("then", 25.0, 25.3, 0.9)]
     ex = heard_extras(out, lines, tr)
     assert [e["text_words"] for e in ex] == [["yeah"]]
+
+
+def test_emphasis_parse_and_pick_prefers_recurring_hook_words_and_spacing():
+    from app.ai.emphasis import pick_emphasis
+    from app.ai.emphasis_job import parse_answers
+
+    lines = ["But I'm a creep", "I'm a weirdo", "What the hell am I doing here", "I don't belong here", "But I'm a creep",
+             "Whatever you want", "I wish I was special", "You're so special", "But I'm a creep"]
+    ans = parse_answers("1: creep\n2: weirdo\n3: hell\n4: belong\n5: creep\n6: -\n7: special\n8: special\n9: invented", lines)
+    assert ans[0] == "creep" and 5 not in ans and 8 not in ans            # '-' และคำที่ไม่อยู่ในบรรทัดถูกทิ้ง
+    picked = pick_emphasis(lines, ans)
+    assert picked.get("butimacreep") == "creep"                           # คำฮุกที่ซ้ำมาก + บรรทัดซ้ำนับเป็นบรรทัดเดียว
+    assert len(picked) <= 3

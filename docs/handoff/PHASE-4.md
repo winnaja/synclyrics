@@ -176,3 +176,9 @@ docs/handoff/PHASE-2.md และ docs/handoff/PHASE-4.md ให้ครบ แ
 - ถ้าจะเอา LLM มาใช้จริง: 4B + ปล่อย VRAM ของโมเดลอื่นก่อน + ให้ตอบ JSON แบบกะทัดรัด + ทดสอบคุณภาพกับเพลงหลายภาษา
 - ลบไฟล์ไม่ใช้: Whisper large-v3 (2.9 GB), เสียงเพลงชั่วคราว `cache/analysis` (90 MB), `build_launcher/work`
 - (รอบ 10 ต่อ) Qwen2.5-3B-Instruct ct2 int8 (2.9 GB, ~12-20 วิ/เพลง 37-81 บรรทัด, 5 วิโหลด) + prompt กะทัดรัด (`COMPACT_SYSTEM`/`parse_compact`): **เร็วพอแต่ไม่ดี** — BACK เดาเป็นรูปแบบ (ทุกบรรทัดที่ 3, หรือคัดลอกตัวอย่าง), EMPH ว่างหรือมั่ว, เพลงเกาหลี 82 วิ · ยังไม่เชื่อมเข้าระบบ · 4B ทดสอบไม่ได้ขณะแอปเปิดอยู่ (VRAM ไม่พอ ~1 tok/s) → ต้องปิดแอปก่อนทดสอบ
+
+## รอบ 11 (2026-10-21): คำเน้นด้วยโมเดลภาษา (Qwen3-4B-Instruct) — ใช้งานจริงแล้ว
+- ปิดแอปแล้ว 4B เร็วมาก (3-7 วิ/เพลงสำหรับคำสั่งสั้น; งานเต็ม 13-20 วิรวมโหลด 9 วิ) · คำสั่งวิเคราะห์ทั้งเพลงรอบเดียวยังมั่ว (ชี้ทั้งก้อนเป็น backing/junk) แต่ **few-shot รายบรรทัด ("N: word") ดี**: Creep → angel/special/creep/belong, Dopamine → Dopamine/commitment/secret/love
+- `emphasis_job.py` (worker: ปล่อย Whisper/Demucs/MMS → โหลด 4B → ถามทีละ 50 บรรทัด → ปล่อย) · `emphasis.py` (`pick_emphasis` เลือกบรรทัดไฮไลต์: คำฮุกที่ซ้ำ + คำท้ายบรรทัด ไม่เกิน ~28% ห่างกัน ≥2 บรรทัด; `LyricsEmphasis` เก็บ DB `ai_results kind=emphasis`) · `EMPHASIS_READY` → `LyricsModel.apply_emphasis` (จับคู่ด้วยข้อความบรรทัด ทนการตัดบรรทัด/แทรกแถวคอรัส)
+- `emph_on` เปิดเป็นค่าเริ่มต้น (settings v5 ล้างค่าเก่า) · `emphasis.*` ใน models.yaml · โหลด 4B ครั้งแรกอัตโนมัติ ~4 GB ถ้ายังไม่มี (ตอนนี้อยู่ใน `ai_runtime/models/llm/`)
+- ลบโมเดลทดลอง 1.7B/3B ได้ (`ai_runtime/models/llm/qwen3-1.7b-ct2-int8`, `qwen2.5-3b-instruct-ct2-int8`)

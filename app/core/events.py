@@ -26,6 +26,7 @@ PLAYBACK_STATE = "playback.state"            # {playing, video_id}
 LYRICS_READY = "lyrics.ready"                # {video_id, lyrics, source_label, candidates_count}
 LYRICS_TIMING_UPDATED = "lyrics.timing"      # {video_id, start, end, words}  อัปเกรดเวลาทีละช่วง
 LYRICS_RETIMED = "lyrics.retimed"            # {video_id, lyrics, source_label, final, coverage, gaps}  AI จัดเวลาใหม่จากเสียง (แทนเวลาของเนื้อเพลงทั้งชุดโดยไม่รีเซ็ตการเลื่อน)
+EMPHASIS_READY = "lyrics.emphasis"             # {video_id, emphasis: {ข้อความบรรทัด(normalize): คำเน้น}}  AI เลือกคำเน้นของเพลง
 TRANSLATION_READY = "lyrics.translation"     # {video_id, translations: [str], lang}  คำแปลทั้งเพลงจาก AI (ทีละบรรทัด ว่าง = ไม่มี)
 ALIGN_COVERAGE = "lyrics.coverage"           # {video_id, ranges: [[start,end],...]}  แถบบน progress bar
 ANALYSIS_READY = "analysis.ready"            # {video_id, analysis}

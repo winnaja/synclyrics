@@ -57,6 +57,11 @@ translate:                # คำแปล (เฟส 4) — โมเดลแ
   beam_size: 4
   keep_loaded: false
 
+emphasis:                # คำเน้นของเพลง (AI ภาษาในเครื่อง ~4 GB โหลดครั้งแรก) — เลือกคำที่มีน้ำหนักทางอารมณ์ให้ขยาย/เรืองแสงตอนร้อง
+  enabled: true
+  model: jncraton/Qwen3-4B-Instruct-2507-ct2-int8
+  local_name: qwen3-4b-instruct-2507-ct2-int8
+
 analysis:                 # การฟังเสียงเบื้องหลังเพื่อจัดเวลาเนื้อเพลง (แอปไม่เล่นเสียงเอง โหลดเสียงมาวิเคราะห์อย่างเดียว)
   enabled: true
   max_song_s: 900         # ยาวกว่านี้ไม่ใช่เพลง ข้าม

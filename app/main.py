@@ -156,6 +156,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             from app.ai.aligner import LyricsAligner
             from app.ai.client import AiClient
+            from app.ai.emphasis import LyricsEmphasis
             from app.ai.translator import LyricsTranslator
             from app.core.config import ModelsConfig, load_model
 
@@ -169,6 +170,7 @@ def main(argv: list[str] | None = None) -> int:
                                                position_fn=lambda: controller.remote_clock.position(),
                                                on_mismatch=controller.on_align_mismatch)
             controller.translator = LyricsTranslator(ai, core.bus, core.paths.db_file, mdict)
+            controller.emphasizer = LyricsEmphasis(ai, core.bus, core.paths.db_file, mdict)
             from app.core.events import LYRICS_RETIMED
 
             core.bus.subscribe(LYRICS_RETIMED, controller.on_lyrics_retimed)

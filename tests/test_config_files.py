@@ -101,7 +101,7 @@ def test_settings_v1_migration_drops_old_animation_values_but_keeps_user_choices
     old = {"version": 1, "overlay": {"anim_speed": 0.85, "glow_strength": 0.6, "font_size": 50, "word_anim": "glow_rise"},
            "lyrics_look": {"spring_stiffness": 120.0, "font_family": "X"}, "fullwindow": {"blur": 0.6, "w": 1000, "inactive_opacity": 0.5}}
     new = migrate_raw("settings.yaml", old)
-    assert new["version"] == 4
+    assert new["version"] == 5
     assert new["overlay"] == {"font_size": 50} and new["lyrics_look"] == {"font_family": "X"} and new["fullwindow"] == {"w": 1000}
     assert old["overlay"]["anim_speed"] == 0.85       # ไม่แก้ข้อมูลต้นฉบับ
 
@@ -120,5 +120,5 @@ def test_settings_v3_migration_resets_close_to_tray_to_new_default():
     from app.core.config import Settings, migrate_raw
 
     new = migrate_raw("settings.yaml", {"version": 3, "startup": {"close_to_tray": True, "autostart": True}})
-    assert new["startup"] == {"autostart": True} and new["version"] == 4
+    assert new["startup"] == {"autostart": True} and new["version"] == 5
     assert Settings.model_validate(new).startup.close_to_tray is False

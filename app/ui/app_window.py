@@ -38,6 +38,7 @@ from app.core.events import (
     QUEUE_CHANGED,
     TRACK_CHANGED,
     TRACK_META_READY,
+    EMPHASIS_READY,
     TRANSLATION_READY,
     VOLUME_CHANGED,
     EventBus,
@@ -465,6 +466,10 @@ def make_bridge_classes() -> tuple[type, type]:
                     self._has_translation = True
                     self._translation_lang = _LANG_NAMES.get(str(p.get("lang") or "th"), "")
                     self.translationChanged.emit()
+            elif topic == EMPHASIS_READY:
+                if self._is_stale(p):
+                    return
+                self._model.apply_emphasis({str(k): str(v) for k, v in (p.get("emphasis") or {}).items()})
             elif topic == LYRICS_TIMING_UPDATED:
                 if self._is_stale(p):
                     return

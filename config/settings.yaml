@@ -1,7 +1,7 @@
 # SyncLyrics — การตั้งค่าเริ่มต้น (ไฟล์นี้สร้างอัตโนมัติจาก app/core/config.py: Settings)
 # ห้ามแก้ไฟล์นี้ด้วยมือ — แก้ค่าเริ่มต้นในโค้ดแล้วรัน scripts/gen_default_settings.py
 # ค่าที่ผู้ใช้เปลี่ยนในหน้าตั้งค่าจะถูกเก็บที่ %LOCALAPPDATA%\SyncLyrics\settings.yaml
-version: 4
+version: 5
 lyrics_look:
   font_family: SF Thonburi
   font_fallbacks:
@@ -114,7 +114,7 @@ overlay:
   glow_color: '#FFFFFF'
   word_hold_ms: 250
   word_release_ms: 700
-  emph_on: false
+  emph_on: true
   emph_min_s: 1.2
   emph_glow: 0.9
   emph_scale: 1.08

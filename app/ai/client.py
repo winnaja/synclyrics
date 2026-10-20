@@ -152,6 +152,9 @@ class AiClient:
     def submit_translate(self, video_id: str, lines: list[str], source_lang: str | None, target_lang: str, handler: EventHandler) -> str:
         return self._submit("translate", {"video_id": video_id, "lines": lines, "source_lang": source_lang, "target_lang": target_lang}, handler)
 
+    def submit_emphasis(self, video_id: str, lines: list[str], handler: EventHandler) -> str:
+        return self._submit("emphasis", {"video_id": video_id, "lines": lines}, handler)
+
     def _submit(self, type_: str, payload: dict[str, Any], handler: EventHandler) -> str:
         job_id = uuid.uuid4().hex[:12]
         payload = {**payload, "job_id": job_id}

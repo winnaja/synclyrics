@@ -20,6 +20,11 @@ from app.core.models import Line, Lyrics, Word, WordTimingSource
 GAP_MIN_S = 4.0
 
 
+def _norm_key(text: str) -> str:
+    """ข้อความ -> คีย์เทียบ (ไม่สนตัวพิมพ์/เครื่องหมาย/ช่องว่าง)"""
+    return "".join(c for c in text.casefold() if c.isalnum())
+
+
 def word_to_dict(w: Word) -> dict[str, Any]:
     """คำ -> dict สำหรับ QML (เวลา estimated ใช้การเติมสีแบบเดียวกัน)"""
     return {
@@ -219,6 +224,7 @@ def make_lyrics_model_class() -> type:
             super().__init__(parent)
             self._rows: list[dict[str, Any]] = []
             self._starts: list[float] = []
+            self._emph: dict[str, str] = {}      # ข้อความบรรทัด(normalize) -> คำเน้น (จาก AI) ใส่ซ้ำทุกครั้งที่สร้างแถวใหม่
 
         # ---------- QAbstractListModel ----------
         def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:  # noqa: B008
@@ -240,6 +246,7 @@ def make_lyrics_model_class() -> type:
         def set_lyrics(self, lyrics: Lyrics) -> None:
             """แทนที่เนื้อเพลงทั้งชุด"""
             rows = lyrics_to_rows(lyrics)
+            self._mark_emphasis(rows)
             self.beginResetModel()
             self._rows = rows
             self._starts = [r["start"] for r in rows]
@@ -249,6 +256,7 @@ def make_lyrics_model_class() -> type:
         def retime(self, lyrics: Lyrics, vocal_gaps: list[tuple[float, float]] | None = None) -> None:
             """AI จัดเวลาใหม่ (จำนวนบรรทัดเท่าเดิม): แก้เวลา/คำ/ช่วงดนตรีของแต่ละบรรทัดแทนที่ ไม่รีเซ็ต model (คำแปล/ตำแหน่งเลื่อนคงเดิม)"""
             rows = lyrics_to_rows(lyrics, vocal_gaps)
+            self._mark_emphasis(rows)
             if len(rows) != len(self._rows):
                 self.set_lyrics(lyrics)
                 return
@@ -265,6 +273,34 @@ def make_lyrics_model_class() -> type:
                 changed = True
             if changed:
                 self._starts = [r["start"] for r in self._rows]
+
+        def _mark_emphasis(self, rows: list[dict[str, Any]]) -> bool:
+            """ใส่ธง emphasis ให้คำที่ AI เลือกในบรรทัดที่ข้อความตรงกัน (บรรทัดซ้ำ/ฮุกได้ทุกบรรทัด) · คืน True ถ้ามีแถวใดเปลี่ยน"""
+            if not self._emph:
+                return False
+            changed = False
+            for row in rows:
+                target = self._emph.get(_norm_key(str(row.get("text", ""))))
+                if not target:
+                    continue
+                for w in row["words"]:
+                    if not w.get("emphasis") and _norm_key(str(w.get("text", ""))) == target and not w.get("background") and not w.get("spacer"):
+                        w["emphasis"] = True
+                        changed = True
+                        break
+            return changed
+
+        def apply_emphasis(self, mapping: dict[str, str]) -> bool:
+            """AI เลือกคำเน้นเสร็จ: ใส่ในแถวปัจจุบัน (คำที่ผ่านการจัดเวลา/ตัดบรรทัดแล้วก็ยังตรงด้วยข้อความ)"""
+            self._emph = {k: _norm_key(v) for k, v in mapping.items() if k and v}
+            changed = False
+            for i, row in enumerate(self._rows):
+                before = [bool(w.get("emphasis")) for w in row["words"]]
+                if self._mark_emphasis([row]) and before != [bool(w.get("emphasis")) for w in row["words"]]:
+                    idx = self.index(i, 0)
+                    self.dataChanged.emit(idx, idx, [role_ids["words"]])
+                    changed = True
+            return changed
 
         def set_translations(self, translations: list[str]) -> bool:
             """ใส่คำแปลทีละบรรทัด (ลำดับตรงกับบรรทัด) คืน True เมื่อจำนวนตรงและมีผล"""
@@ -283,6 +319,7 @@ def make_lyrics_model_class() -> type:
             self.retime(lyrics, vocal_gaps)
 
         def clear(self) -> None:
+            self._emph = {}
             if not self._rows:
                 return
             self.beginResetModel()

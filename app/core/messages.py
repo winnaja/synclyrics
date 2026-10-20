@@ -61,6 +61,7 @@ APP_TO_EXT: frozenset[str] = frozenset({
 AI_REQUESTS: frozenset[str] = frozenset({
     "warmup",           # {}  โหลดโมเดลค้างใน VRAM + warm-up ด้วยเสียงเงียบ
     "align_song",       # {job_id, video_id, audio_path, lines: [{words,start,end,word_times?}], language?, start_hint}  จัดเวลาเนื้อเพลงจากเสียง (ทยอยทีละช่วง) — ไม่มี lines = ถอดเสียงเป็นเนื้อเพลง
+    "emphasis",         # {job_id, video_id, lines: [str]}  โมเดลภาษาเลือกคำเน้นทีละบรรทัด
     "translate",        # {job_id, video_id, lines: [str], source_lang?, target_lang}  แปลทั้งเพลง (ใช้บริบทข้างเคียง)
     "separate_chunk",   # {job_id, video_id, pcm_path, sample_rate, start, end}  -> stems ลง cache
     "align_chunk",      # {job_id, video_id, pcm_path, stems_dir, start, end, lines, language}

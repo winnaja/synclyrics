@@ -87,6 +87,7 @@ class PlayerController:
         self.tab_control: Any = None
         # เฟส 4: ตัวจัดเวลาเนื้อเพลงจากเสียงด้วย AI (LyricsAligner) — main ตั้งให้ · None = ไม่มี AI (ใช้เวลาแบบประมาณ/ของแหล่งล้วน)
         self.aligner: Any = None
+        self.emphasizer: Any = None   # LyricsEmphasis (เลือกคำเน้นด้วยโมเดลภาษา) · None = ไม่ใช้
         self.translator: Any = None   # LyricsTranslator (แปลไทยทั้งเพลงด้วย AI) · None = ไม่แปล
         self._mismatch_tries: dict[str, int] = {}
 
@@ -345,6 +346,8 @@ class PlayerController:
                 self.aligner.cancel(self.track.video_id)   # เพลงเปลี่ยน: เลิกฟังเสียงของเพลงเก่า
                 if self.translator is not None:
                     self.translator.cancel(self.track.video_id)
+                if self.emphasizer is not None:
+                    self.emphasizer.cancel(self.track.video_id)
             # ชื่อ/ช่อง/Music section ที่ส่วนขยายส่งมาเป็นแค่ "คำใบ้" (อ่านจากหน้าเว็บ อาจเป็นของเพลงก่อนหน้าตอนเปลี่ยนเพลง)
             # จึงไม่แสดง/ไม่ใช้ค้นหา จนกว่าจะยืนยันกับ YouTube จาก videoId (oEmbed + yt-dlp) — ดู _companion_async
             self.track = TrackRef(video_id=track.video_id, added_from="companion")
@@ -570,6 +573,8 @@ class PlayerController:
             self.io.submit(self.aligner.start(video_id, chosen, res.source_label, self.duration or None))
             if self.translator is not None and chosen is not None and getattr(ai_cfg, "translate", True):
                 self.io.submit(self.translator.start(video_id, chosen))
+            if self.emphasizer is not None and chosen is not None:
+                self.io.submit(self.emphasizer.start(video_id, chosen))
         except Exception:
             log.exception("ส่งงานจัดเวลาด้วย AI ไม่สำเร็จ")
 

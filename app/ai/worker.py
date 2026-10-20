@@ -449,6 +449,10 @@ class Worker:
             self.warmup()
         elif t == "align_song":
             self.job_align_song(p)
+        elif t == "emphasis":
+            from app.ai import emphasis_job
+
+            emphasis_job.run(self, p)
         elif t == "translate":
             from app.ai import translate_job
 
