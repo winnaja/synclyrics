@@ -599,3 +599,24 @@ def test_repair_if_corrupt_salvages_readable_rows_and_backs_up(tmp_path):
     c = sqlite3.connect(p)
     c.execute("SELECT count(*) FROM tracks").fetchone()
     c.close()
+
+
+def test_dataset_recorder_writes_song_files_and_events(tmp_path, monkeypatch):
+    import json
+
+    import numpy as np
+
+    from app.core import dataset
+
+    monkeypatch.setattr(dataset, "DATASET_DIR", tmp_path / "ds")
+    stems = tmp_path / "stems"
+    stems.mkdir()
+    np.save(stems / "vocals16k.npy", np.zeros(100, dtype=np.float16))
+    (stems / "transcript.json").write_text("{}", encoding="utf-8")
+    dataset.record_song("abc", {"title": "t", "lines": []}, [{"source": "lrclib", "lines": []}], stems)
+    d = tmp_path / "ds" / "songs" / "abc"
+    assert json.loads((d / "meta.json").read_text(encoding="utf-8"))["title"] == "t"
+    assert (d / "vocals16k.npy").exists() and (d / "candidates.json").exists() and (d / "transcript.json").exists()
+    dataset.record_event("next_candidate", "abc", position_s=12.5)
+    line = (tmp_path / "ds" / "events.jsonl").read_text(encoding="utf-8").strip()
+    assert json.loads(line)["kind"] == "next_candidate" and json.loads(line)["position_s"] == 12.5

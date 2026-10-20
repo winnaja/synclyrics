@@ -273,11 +273,22 @@ class PlayerController:
         self.volume, self.muted = volume, muted
         self.bus.publish(ev.VOLUME_CHANGED, {"volume": volume, "muted": muted})
 
+    def _feedback(self, kind: str, **data: Any) -> None:
+        """บันทึกการกระทำของผู้ใช้เป็นสัญญาณ (กด "ตัวอื่น" = ฉบับเดิมไม่ถูกใจ · ปรับเวลา = เวลาไม่ตรง) ถ้าเปิดเก็บข้อมูลสอน"""
+        try:
+            if self.track is not None and getattr(getattr(self.settings, "ai", None), "collect_data", True):
+                from app.core import dataset
+
+                dataset.record_event(kind, self.track.video_id, position_s=round(float(self.remote_clock.position() or 0.0), 2), **data)
+        except Exception:  # noqa: BLE001
+            pass
+
     def adjust_offset(self, delta_s: float) -> None:
         """[ / ] ปรับ offset เนื้อเพลงทีละ 0.1 วิ (บวก = เนื้อเพลงช้าลง) จำตาม videoId"""
         if self.track is None:
             return
         self.lyrics_offset = round(self.lyrics_offset + delta_s, 2)
+        self._feedback("offset", offset=self.lyrics_offset, delta=delta_s)
         try:
             self._conn().execute("UPDATE tracks SET lyrics_offset_s=? WHERE video_id=?",
                                  (self.lyrics_offset, self.track.video_id))
@@ -290,6 +301,7 @@ class PlayerController:
         if self.track is None:
             return
         vid = self.track.video_id
+        self._feedback("next_candidate")
 
         async def run() -> None:
             try:

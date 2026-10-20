@@ -169,6 +169,7 @@ def main(argv: list[str] | None = None) -> int:
             controller.aligner = LyricsAligner(ai, core.bus, core.paths.db_file, core.paths, media, mdict,
                                                position_fn=lambda: controller.remote_clock.position(),
                                                on_mismatch=controller.on_align_mismatch)
+            controller.aligner.settings_ai = core.settings.ai
             controller.translator = LyricsTranslator(ai, core.bus, core.paths.db_file, mdict)
             controller.emphasizer = LyricsEmphasis(ai, core.bus, core.paths.db_file, mdict)
             from app.core.events import LYRICS_RETIMED

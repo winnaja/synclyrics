@@ -45,3 +45,5 @@ Thumbs.db
 build_launcher/work/
 build_launcher/*.spec
 /SyncLyrics.exe
+# ข้อมูลสอน (เสียงร้อง/เนื้อเพลง/ผล AI) เก็บในเครื่องเท่านั้น
+/dataset/

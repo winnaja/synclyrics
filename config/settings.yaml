@@ -170,6 +170,7 @@ hotkeys:
 ai:
   enabled: true
   translate: true
+  collect_data: true
 lyrics_sources:
   enabled: {}
   allow_ai_transcribe: true
@@ -178,6 +179,7 @@ lyrics_sources:
   src_netease: true
   src_qqmusic: true
   src_youtube_subs: true
+  audio_pick: true
   split_long_lines: true
   max_line_width: 46
 playback:

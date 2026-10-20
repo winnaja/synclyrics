@@ -231,6 +231,7 @@ class LyricsAligner:
         self.algo = int(models_config.get("analysis", {}).get("algo_version", 1))
         self._base: dict[str, tuple[Lyrics, str]] = {}       # video_id -> (เนื้อเพลงฐานที่กำลังจัด, ป้ายแหล่ง)
         self._alts: dict[str, list[tuple[Lyrics, str]]] = {}
+        self.settings_ai: Any = None       # AiSettings (ai.collect_data) — main.py ใส่ให้
         self._jobs: dict[str, str] = {}                      # video_id -> job_id ปัจจุบัน
 
     # ---------- DB ----------
@@ -364,6 +365,31 @@ class LyricsAligner:
                 self._save(video_id, key, data)
             base, label = self._pick_base(video_id, base, label, data)
             self._finish(video_id, base, label, data, from_cache=False)
+            self._record(video_id, base, label, data)
+
+    def _record(self, video_id: str, base: Lyrics | None, label: str, data: dict[str, Any]) -> None:
+        """เก็บเพลงนี้เป็นข้อมูลสอน (ปิดได้ด้วยตั้งค่า ai.collect_data) — ผลจริงของ AI + ทุกฉบับของเนื้อเพลง + เสียงร้องที่แยกแล้ว"""
+        if not self.collect_data() or data.get("mode") not in ("match", "reconstruct", "transcribe"):
+            return
+        try:
+            from app.core import dataset
+
+            cands = []
+            main = self._base.get(video_id, (None, ""))
+            for lyr, lbl in [(main[0], main[1])] + list(self._alts.get(video_id, [])):
+                if lyr is not None:
+                    cands.append({"source": lyr.source, "source_id": lyr.source_id, "label": lbl, "language": lyr.language,
+                                  "timing": lyr.timing.value, "lines": dataset.lyrics_lines(lyr)})
+            meta = {"title": getattr(base, "title", None), "artist": getattr(base, "artist", None), "label": label,
+                    "language": data.get("language"), "duration": data.get("duration"), "mode": data.get("mode"), "alt": data.get("alt", 0),
+                    "coverage": data.get("coverage"), "offset_s": data.get("offset_s"), "singers": data.get("singers"),
+                    "version_mismatch": data.get("version_mismatch"), "algo_version": self.algo, "lines": data.get("lines", [])}
+            dataset.record_song(video_id, meta, cands, Path(self.paths.stems_cache_dir) / video_id)
+        except Exception:  # noqa: BLE001
+            log.exception("เก็บข้อมูลสอนไม่สำเร็จ")
+
+    def collect_data(self) -> bool:
+        return bool(getattr(self.settings_ai, "collect_data", True)) if self.settings_ai is not None else True
 
     def _pick_base(self, video_id: str, base: Lyrics | None, label: str, data: dict[str, Any]) -> tuple[Lyrics | None, str]:
         """AI ฟังเสียงเทียบหลายฉบับแล้วเลือกฉบับอื่น (data["alt"] = 1..n) → ใช้ฉบับนั้นเป็นฐานของผล"""

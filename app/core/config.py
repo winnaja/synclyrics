@@ -365,6 +365,7 @@ class AiSettings(_Model):
 
     enabled: bool = True     # ให้ AI ฟังเสียงจริงเพื่อจัดเวลาเนื้อเพลง (ปิด = ใช้เวลาจากแหล่ง/ประมาณล้วน ไม่ใช้ GPU)
     translate: bool = True   # แปลเนื้อเพลงที่ไม่ใช่ภาษาไทยเป็นไทยด้วย AI
+    collect_data: bool = True  # เก็บข้อมูลสอนจากเพลงที่ฟัง (เสียงร้อง เนื้อเพลงทุกฉบับ ผล AI การกระทำของผู้ใช้) ไว้ในเครื่องที่ dataset/ เพื่อเทรนโมเดลของเราเอง
 
 
 class StartupSettings(_Model):
