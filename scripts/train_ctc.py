@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import argparse
+import gc
 import json
 import queue
 import random
@@ -76,7 +77,9 @@ def main() -> int:
     ap.add_argument("--freeze-layers", type=int, default=8)
     ap.add_argument("--max-clip-s", type=float, default=14.0)
     ap.add_argument("--max-steps", type=int, default=0)
-    ap.add_argument("--val-every", type=int, default=400)
+    ap.add_argument("--vram-frac", type=float, default=0.88, help="เพดาน VRAM ที่ PyTorch ใช้ได้ (ส่วนที่เหลือไว้ให้ Windows) — เกินแล้ว Windows ล้นไปใช้แรมเครื่อง ช้าลง 10 เท่า")
+    ap.add_argument("--val-every", type=int, default=800)
+    ap.add_argument("--init", default="", help="เริ่มต่อจากไฟล์น้ำหนักที่เทรนไว้ (เช่น mms_singing.pt) แทนที่จะเริ่มจาก MMS เดิม")
     ap.add_argument("--val-songs", type=int, default=0, help="0 = ใช้เพลง val ทั้งหมด (วัดเวลาเริ่มบรรทัดทุกเพลง + เริ่มคำของเพลงเฉลยรายคำ)")
     ap.add_argument("--max-songs", type=int, default=0)
     ap.add_argument("--out", default=str(ROOT / "ai_runtime" / "models" / "mms_singing.pt"))
@@ -100,8 +103,13 @@ def main() -> int:
     from eval_aligner import evaluate
 
     dev = "cuda" if torch.cuda.is_available() else "cpu"
+    if dev == "cuda":
+        torch.cuda.set_per_process_memory_fraction(args.vram_frac)
     mms = align.load_model({"finetuned": ""}, dev)          # เริ่มจาก MMS เดิมเสมอ
     model = mms["model"]
+    if args.init and Path(args.init).exists():
+        model.load_state_dict(torch.load(args.init, map_location=dev))
+        print(f"เริ่มต่อจาก {args.init}", flush=True)
     train_songs = list(iter_songs("train"))
     val_songs = list(iter_songs("val"))
     if args.val_songs:
@@ -143,6 +151,9 @@ def main() -> int:
             torch.cuda.empty_cache()
             print("  (วัดผลรอบนี้ VRAM ไม่พอ — ข้าม)", flush=True)
             return {"songs": 0}
+        finally:
+            gc.collect()
+            torch.cuda.empty_cache()       # คืน VRAM ที่ค้างจากการวัดผล — ไม่งั้นเหลือไม่พอตอนเทรนแล้วล้นไปใช้แรมเครื่อง ช้าลง 5-10 เท่า
 
     base = val()
     print("ก่อนเทรน (val):", base, flush=True)
@@ -173,6 +184,8 @@ def main() -> int:
                 continue
             sched.step()
             step += 1
+            if dev == "cuda" and step % 100 == 0:
+                torch.cuda.empty_cache()       # กันแคชบวมจนชนเพดาน (ความยาวคลิปไม่เท่ากัน ทำให้เศษหน่วยความจำสะสม)
             if step % 20 == 0:
                 print(f"  ep{ep} step {step}/{total_steps} loss={loss.item():.3f} lr={sched.get_last_lr()[0]:.2e} {time.time() - t0:.0f}s", flush=True)
             if step % args.val_every == 0 or (args.max_steps and step >= args.max_steps):
