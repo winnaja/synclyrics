@@ -33,6 +33,8 @@ def build_examples(songs, mms, max_clip_s: float):
         for c in make_clips(s, max_s=max_clip_s):
             ids = [d[ch] for w in c["words"] for ch in align.romanize_word(w, s.language, mms["uroman"]) if ch in d]
             frames = (c["end"] - c["start"]) * 50
+            if c["end"] - c["start"] > max_clip_s + 1.0:        # บรรทัดเดียวยาวผิดปกติ (เฉลยระดับบรรทัด/ช่วงดนตรี) กิน VRAM เกินและเรียนรู้ไม่ได้
+                continue
             if len(ids) < 6 or len(ids) > frames * 0.8:
                 continue
             ex.append((s, c["start"], c["end"], ids))
@@ -147,15 +149,22 @@ def main() -> int:
     for ep in range(args.epochs):
         for wav, lens, targets, tlens in batches(examples, args.batch, True):
             model.train()
-            wav = wav.to(dev)
-            with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=dev == "cuda"):
-                logits, olens = net(wav, lens.to(dev))
-            lp = F.log_softmax(logits.float(), dim=-1).transpose(0, 1)
-            loss = F.ctc_loss(lp, targets.to(dev), olens, tlens.to(dev), blank=0, zero_infinity=True)
-            opt.zero_grad(set_to_none=True)
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(params, 5.0)
-            opt.step()
+            try:
+                wav = wav.to(dev)
+                with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=dev == "cuda"):
+                    logits, olens = net(wav, lens.to(dev))
+                lp = F.log_softmax(logits.float(), dim=-1).transpose(0, 1)
+                loss = F.ctc_loss(lp, targets.to(dev), olens, tlens.to(dev), blank=0, zero_infinity=True)
+                opt.zero_grad(set_to_none=True)
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(params, 5.0)
+                opt.step()
+            except torch.OutOfMemoryError:       # ก้อนเดียวใหญ่เกิน VRAM: ข้ามก้อนนั้น ไม่ให้ทั้งการเทรนล้ม
+                opt.zero_grad(set_to_none=True)
+                logits = lp = loss = None
+                torch.cuda.empty_cache()
+                print(f"  (ข้ามก้อนที่ VRAM ไม่พอ: {tuple(wav.shape)})", flush=True)
+                continue
             sched.step()
             step += 1
             if step % 20 == 0:
