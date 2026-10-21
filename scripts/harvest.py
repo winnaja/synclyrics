@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import argparse
+import itertools
 import json
 import random
 import re
@@ -305,6 +306,7 @@ def main() -> int:
     ap.add_argument("--workers", type=int, default=2, help="จำนวนเธรดโหลดเสียงล่วงหน้าขนานกับการ์ดจอ")
     ap.add_argument("--batch", type=int, default=100, help="จำนวนเพลงต่อ 1 รอบ (รอบละ 100 เพลง) — ท้ายรอบจะลองเพลงที่เฟลใหม่ในรอบถัดไป")
     ap.add_argument("--max-attempts", type=int, default=3, help="ลองเพลงที่เฟลซ้ำสูงสุดกี่ครั้ง")
+    ap.add_argument("--cookies-dir", default="", help="โฟลเดอร์ไฟล์ cookies.txt (หลายบัญชี) ที่จะหมุนใช้สลับกันทีละเพลง · ไม่ใส่ = ใช้ cookies ของแอป")
     ap.add_argument("--no-playlists", action="store_true")
     ap.add_argument("--yt-playlist", action="append", default=[], help="เพลย์ลิสต์ YouTube เพิ่ม (ใส่ซ้ำได้) — ดึงก่อนทุกอย่าง")
     ap.add_argument("--list", action="store_true", help="แค่แสดงรายการเพลงที่จะดึง (ไม่โหลด ไม่ใช้การ์ดจอ)")
@@ -381,16 +383,20 @@ def main() -> int:
     tmp_root.mkdir(parents=True, exist_ok=True)
     local = threading.local()
 
+    cookie_files = sorted(Path(args.cookies_dir).glob("*.txt")) if args.cookies_dir else []
+    cookie_files = cookie_files or [paths.cookies_file]
+    rr = itertools.count()
+    if len(cookie_files) > 1:
+        print(f"หมุนใช้ cookies {len(cookie_files)} บัญชีสลับกัน (กระจายภาระ ลดโอกาสโดนบล็อก)", flush=True)
+
     def yt_client():
         """yt-dlp เขียน cookies กลับไฟล์ตอนปิด: หลายเธรดแชร์ไฟล์เดียวจะเขียนทับกันจนไฟล์พัง (และไฟล์ของแอปด้วย)
-        → แต่ละเธรดใช้สำเนาของตัวเอง ไม่แตะไฟล์จริง"""
-        c = getattr(local, "yt", None)
-        if c is None:
-            mine = tmp_root / f"cookies_{threading.get_ident()}.txt"
-            if paths.cookies_file.exists():
-                shutil.copyfile(paths.cookies_file, mine)
-            c = local.yt = YouTubeClient(mine, ffmpeg_dir=ff.parent if ff else None)
-        return c
+        → แต่ละเธรดใช้สำเนาของตัวเอง ไม่แตะไฟล์จริง · ทุกครั้งที่เรียก (ต่อ 1 เพลง) สลับไฟล์ cookies ตามลำดับ"""
+        mine = tmp_root / f"cookies_{threading.get_ident()}.txt"
+        src = cookie_files[next(rr) % len(cookie_files)]
+        if src.exists():
+            shutil.copyfile(src, mine)
+        return YouTubeClient(mine, ffmpeg_dir=ff.parent if ff else None)
 
     ctx = {"out": done_dir, "tmp": tmp_root, "worker": worker, "yt": yt_client}
     ctx["out"].mkdir(parents=True, exist_ok=True)
