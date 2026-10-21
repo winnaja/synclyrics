@@ -79,7 +79,7 @@ def main() -> int:
     args = ap.parse_args()
     from app.ai.training.data import iter_songs
 
-    songs = list(iter_songs(None if args.split == "all" else args.split))
+    songs = list(iter_songs(None if args.split == "all" else args.split, need_word=True))
     if args.limit:
         songs = songs[:args.limit]
     print(f"เพลงที่ใช้วัด: {len(songs)} ({args.split}) · โมเดล: {args.model or 'MMS_FA เดิม'}")

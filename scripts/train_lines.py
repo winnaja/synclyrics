@@ -90,7 +90,7 @@ def main() -> int:
     def build(split: str):
         bx, by, lx, ly = [], [], [], []
         base_gap = []
-        for s in iter_songs(split):
+        for s in iter_songs(split, need_word=True):
             ref = s.ref_lines()
             db, r = envelope(np.asarray(s.vocals(), dtype=np.float32))
             words, labels = line_break_labels(ref)

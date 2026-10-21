@@ -49,8 +49,8 @@ class Song:
         return out
 
 
-def iter_songs(split: str | None = None, only_good: bool = True) -> Iterator[Song]:
-    """เพลงที่มีเฉลยรายคำ + เสียงร้อง (ไม่ suspect เมื่อ only_good)"""
+def iter_songs(split: str | None = None, only_good: bool = True, need_word: bool = False) -> Iterator[Song]:
+    """เพลงที่มีเฉลย + เสียงร้อง (ไม่ suspect เมื่อ only_good) · need_word = เฉพาะเฉลยรายคำจริง (ใช้วัดเวลา/เทรนแบ่งบรรทัด) · ไม่ใส่ = รวมเฉลยระดับบรรทัด (พอสำหรับเทรน CTC)"""
     root = DATASET_DIR / "songs"
     if not root.exists():
         return
@@ -65,6 +65,8 @@ def iter_songs(split: str | None = None, only_good: bool = True) -> Iterator[Son
         if not meta.get("ref"):
             continue
         if only_good and (meta.get("suspect") or meta.get("ref_offset_s") is None):
+            continue
+        if need_word and meta.get("ref_timing", "word") != "word":
             continue
         if split and split_of(d.name) != split:
             continue

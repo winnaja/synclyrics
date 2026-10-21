@@ -4,9 +4,9 @@ rem ===== เทรนโมเดลของ SyncLyrics ตั้งแต่�
 rem ใช้:  scripts\train_all.bat [จำนวนเพลงที่จะดึง]   ค่าเริ่มต้น 300   (ทำต่อจากที่ค้างได้ รันซ้ำได้)
 cd /d "%~dp0.."
 set N=%1
-if "%N%"=="" set N=300
-echo [1/4] ดึงเพลงสร้างชุดข้อมูล (%N% เพลง ใช้เวลาประมาณ %N% x 0.5 นาที) ...
-.venv\Scripts\python scripts\harvest.py --limit %N%
+if "%N%"=="" set N=2000
+echo [1/4] ดึงเพลงสร้างชุดข้อมูล (%N% เพลง ใช้เวลาประมาณ %N% x 0.6 นาที) ...
+.venv\Scripts\python scripts\harvest.py --plan %N%
 if errorlevel 1 goto :err
 echo [2/4] เทรนตัวแบ่งบรรทัด/เสียงประสาน ...
 .venv\Scripts\python scripts\train_lines.py
