@@ -211,20 +211,30 @@ def fetch_song(ctx: dict, song: dict, yt_id: str | None, query: str, allow_remix
     return yt_id, stereo
 
 
-def process_song(ctx: dict, song: dict, lyr, level: str, fetched, category: str = "", allow_remix: bool = False) -> str:
-    """ส่วนที่ใช้การ์ดจอ (Demucs + CTC) + บันทึก · fetched = ผลจาก fetch_song"""
-    import numpy as np
-
-    from app.ai.pipeline import align, stems
-    from app.ai.pipeline.match import InLine, ctc_to_result
+def separate_song(ctx: dict, fetched):
+    """Demucs แยกเสียงร้อง (การ์ดจอ ช่วงที่ 1) · fetched = ผลจาก fetch_song -> (yt_id, เสียงร้อง 16k) หรือข้อความเหตุผลที่เฟล"""
+    from app.ai.pipeline import stems
 
     if isinstance(fetched, str):
         return fetched
     yt_id, stereo = fetched
-    out = ctx["out"] / f"ne{song['id']}"
     w = ctx["worker"]
     voc = stems.separate_vocals(w.demucs(), stereo, w.device, w.mcfg.get("demucs", {}))
-    v16 = stems.to_mono_16k(voc, 44100, w.device)
+    return yt_id, stems.to_mono_16k(voc, 44100, w.device)
+
+
+def process_song(ctx: dict, song: dict, lyr, level: str, fetched, category: str = "", allow_remix: bool = False) -> str:
+    """ช่วงที่ 2: CTC หาค่าเลื่อน + บันทึก · fetched = ผลจาก separate_song"""
+    import numpy as np
+
+    from app.ai.pipeline import align
+    from app.ai.pipeline.match import InLine, ctc_to_result
+
+    if isinstance(fetched, str):
+        return fetched
+    yt_id, v16 = fetched
+    out = ctx["out"] / f"ne{song['id']}"
+    w = ctx["worker"]
     # หาค่าเลื่อนคงที่ระหว่างเฉลยกับเสียงนี้
     lines = [InLine(words=[x.text for x in ln.words], start=ln.start, end=ln.end) for ln in lyr.lines]
     g = align.align_global(w.mms(), v16, [ln.words for ln in lines], None)
@@ -504,6 +514,7 @@ def main() -> int:
     from concurrent.futures import ThreadPoolExecutor
 
     pool = ThreadPoolExecutor(max_workers=max(1, args.workers))
+    gpu2 = ThreadPoolExecutor(max_workers=1)      # ช่วงที่ 2 (CTC + บันทึก) ทำขนานกับ Demucs ของเพลงถัดไป
     for rnd in range(1, rounds + 1):
         if done >= target and not any(r["attempts"] < args.max_attempts for r in failed.values()):
             break
@@ -511,10 +522,11 @@ def main() -> int:
         print(f"\n=== รอบ {rnd}/{rounds} (เป้า {args.batch} เพลงต่อรอบ · เสร็จแล้ว {done}/{target} · ค้างรอลองใหม่ {len(failed)}) ===", flush=True)
         it = round_items()
         inflight: deque = deque()
+        pending2: deque = deque()
         exhausted = False
         while True:
             # เติมคิวเตรียมของล่วงหน้า (โหลดเสียงเพลงถัดไประหว่างที่การ์ดจอทำเพลงปัจจุบัน)
-            while not exhausted and len(inflight) < args.workers + 1 and ok_round + len(inflight) < args.batch and done + len(inflight) < target:
+            while not exhausted and len(inflight) < args.workers + 1 and ok_round + len(inflight) + len(pending2) < args.batch and done + len(inflight) + len(pending2) < target:
                 item = next(it, None)
                 if item is None:
                     exhausted = True
@@ -522,13 +534,20 @@ def main() -> int:
                 inflight.append(pool.submit(prepare, item))
             if not inflight:
                 break
-            res = inflight.popleft().result()
-            if finish(*res):
-                ok_round += 1
+            item, lyr, level, fetched = inflight.popleft().result()
+            sep = separate_song(ctx, fetched) if lyr is not None else None
+            del fetched
+            pending2.append(gpu2.submit(finish, item, lyr, level, sep))
+            del sep
+            while len(pending2) > 1:
+                ok_round += bool(pending2.popleft().result())
+        while pending2:
+            ok_round += bool(pending2.popleft().result())
         print(f"=== จบรอบ {rnd}: ได้ {ok_round} เพลง · ทั้งหมด {done}/{target} · ค้างรอลองใหม่ {len(failed)} (dataset/harvest_failed.json) ===", flush=True)
         if pos >= len(todo) and ok_round == 0:
             break
     pool.shutdown()
+    gpu2.shutdown()
     print(f"เสร็จ: ได้ {done} เพลง · ตามหมวด: {got} · เฟลค้าง {len(failed)} เพลง (รันซ้ำเพื่อลองใหม่)")
     return 0
 
