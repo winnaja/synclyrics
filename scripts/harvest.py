@@ -301,8 +301,8 @@ def main() -> int:
     ap.add_argument("--limit", type=int, default=50, help="จำนวนเพลงสูงสุดที่ดึงรอบนี้ (โหมดไม่ใช้ --plan)")
     ap.add_argument("--queries", default="", help="ไฟล์บรรทัดละ 'ศิลปิน - ชื่อเพลง'")
     ap.add_argument("--from-db", default="", help="สำเนา sqlite ของแอป: ใช้เพลงที่เคยเล่น")
-    ap.add_argument("--sleep", type=float, default=2.5, help="หน่วงหลังแตะ YouTube แต่ละครั้ง (สุ่ม ±40%) ต่อเธรด")
-    ap.add_argument("--workers", type=int, default=3, help="จำนวนเธรดโหลดเสียงล่วงหน้าขนานกับการ์ดจอ")
+    ap.add_argument("--sleep", type=float, default=6.0, help="หน่วงหลังแตะ YouTube แต่ละครั้ง (สุ่ม ±40%) ต่อเธรด")
+    ap.add_argument("--workers", type=int, default=2, help="จำนวนเธรดโหลดเสียงล่วงหน้าขนานกับการ์ดจอ")
     ap.add_argument("--batch", type=int, default=100, help="จำนวนเพลงต่อ 1 รอบ (รอบละ 100 เพลง) — ท้ายรอบจะลองเพลงที่เฟลใหม่ในรอบถัดไป")
     ap.add_argument("--max-attempts", type=int, default=3, help="ลองเพลงที่เฟลซ้ำสูงสุดกี่ครั้ง")
     ap.add_argument("--no-playlists", action="store_true")
@@ -454,15 +454,40 @@ def main() -> int:
     pos = 0
     rounds = max(1, -(-target // max(1, args.batch))) + 3      # +3: รอบของเพลย์ลิสต์ผู้ใช้ และรอบลองเพลงที่เฟลใหม่
 
+    gate = {"until": 0.0, "streak": 0}      # YouTube บล็อก ("ยืนยันว่าไม่ใช่บอท") -> ทุกเธรดหยุดพักร่วมกัน แล้วค่อยลองใหม่
+    gate_lock = threading.Lock()
+
+    def is_blocked(msg) -> bool:
+        return isinstance(msg, str) and ("ล็อกอิน" in msg or "Sign in" in msg or "not a bot" in msg)
+
+    def wait_gate() -> None:
+        while True:
+            d = gate["until"] - time.time()
+            if d <= 0:
+                return
+            time.sleep(min(d, 30.0))
+
     def prepare(item):
         """เธรดเตรียมของ: เนื้อเพลง NetEase + โหลดเสียง (ขนานกับที่การ์ดจอทำเพลงก่อนหน้า)"""
         cat, song, yt_id, query, rm = item
         lyr, level = netease_lyrics(song)
         if lyr is None:
             return item, None, None, None
-        fetched = fetch_song(ctx, song, yt_id, query, rm)
-        if not isinstance(fetched, str) or fetched.startswith("โหลดเสียงไม่ได้"):
-            time.sleep(args.sleep * random.uniform(0.6, 1.4))      # หน่วงเฉพาะเมื่อแตะ YouTube (โหลดจริง)
+        fetched = None
+        for _try in range(4):
+            wait_gate()
+            fetched = fetch_song(ctx, song, yt_id, query, rm)
+            if is_blocked(fetched):
+                with gate_lock:
+                    gate["streak"] += 1
+                    wait_s = min(30 * 60, 120 * 2 ** min(gate["streak"] - 1, 4))      # 2, 4, 8, 16, 30 นาที
+                    gate["until"] = max(gate["until"], time.time() + wait_s)
+                    print(f"  ! YouTube ขอล็อกอิน/ตรวจบอท -> พัก {wait_s // 60} นาที ({time.strftime('%H:%M:%S')})", flush=True)
+                continue
+            if not isinstance(fetched, str) or fetched.startswith("โหลดเสียงไม่ได้"):
+                gate["streak"] = 0
+                time.sleep(args.sleep * random.uniform(0.6, 1.4))      # หน่วงเฉพาะเมื่อแตะ YouTube (โหลดจริง)
+            break
         return item, lyr, level, fetched
 
     def finish(item, lyr, level, fetched, attempts_before: int = 0) -> bool:
@@ -487,7 +512,8 @@ def main() -> int:
         else:
             rec = failed.get(key) or {"song": {"id": song["id"], "name": song.get("name"), "artists": artists_of(song), "dt": song.get("dt") or song.get("duration")},
                                       "query": query, "category": cat, "yt_id": yt_id, "allow_remix": rm, "attempts": 0}
-            rec["attempts"] += 1
+            if not is_blocked(status):
+                rec["attempts"] += 1      # โดนบล็อกชั่วคราวไม่นับเป็นการลองซ้ำของเพลงนี้
             rec["reason"] = status
             failed[key] = rec
         _save_json(failed_path, failed)
