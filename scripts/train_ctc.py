@@ -75,7 +75,7 @@ def main() -> int:
     ap.add_argument("--max-clip-s", type=float, default=14.0)
     ap.add_argument("--max-steps", type=int, default=0)
     ap.add_argument("--val-every", type=int, default=400)
-    ap.add_argument("--val-songs", type=int, default=12)
+    ap.add_argument("--val-songs", type=int, default=0, help="0 = ใช้เพลง val ทั้งหมด (วัดเวลาเริ่มบรรทัดทุกเพลง + เริ่มคำของเพลงเฉลยรายคำ)")
     ap.add_argument("--max-songs", type=int, default=0)
     ap.add_argument("--out", default=str(ROOT / "ai_runtime" / "models" / "mms_singing.pt"))
     args = ap.parse_args()
@@ -101,7 +101,9 @@ def main() -> int:
     mms = align.load_model({"finetuned": ""}, dev)          # เริ่มจาก MMS เดิมเสมอ
     model = mms["model"]
     train_songs = list(iter_songs("train"))
-    val_songs = list(iter_songs("val"))[:args.val_songs]
+    val_songs = list(iter_songs("val"))
+    if args.val_songs:
+        val_songs = val_songs[:args.val_songs]
     if args.max_songs:
         train_songs = train_songs[:args.max_songs]
     if not val_songs and train_songs:

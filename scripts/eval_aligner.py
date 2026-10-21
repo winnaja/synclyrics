@@ -1,7 +1,7 @@
 """วัดความแม่นของตัวจัดเวลา (CTC ทั้งเพลง) กับเฉลยรายคำในชุดข้อมูล — เทียบ MMS เดิมกับที่ fine-tune แล้ว
 
 ใช้:  .venv\\Scripts\\python scripts\\eval_aligner.py [--split val|train|all] [--model <ไฟล์ .pt>] [--limit N]
-ไม่ใส่ --model = MMS_FA เดิม · พิมพ์ median / ≤0.15 วิ / ≤0.3 วิ ของคลาดเวลาเริ่มคำ รวมและรายเพลง
+ไม่ใส่ --model = MMS_FA เดิม · พิมพ์ median / ≤0.15 วิ / ≤0.3 วิ ของคลาดเวลาเริ่มบรรทัด (ทุกเพลงที่ใช้ได้) และเริ่มคำ (เฉพาะเพลงเฉลยรายคำจริง)
 """
 
 from __future__ import annotations
@@ -16,11 +16,14 @@ sys.path.insert(0, str(ROOT))
 
 
 def evaluate(mms, songs, verbose: bool = True) -> dict:
+    """วัดความคลาดเวลาเริ่ม: ทุกเพลงวัด "เวลาเริ่มบรรทัด" (line_*) — เพลงที่เฉลยรายคำจริงวัด "เวลาเริ่มคำ" เพิ่ม (word) ·
+    เพลงเฉลยระดับบรรทัดไม่มีเวลารายคำจริง จึงไม่เอามาวัดรายคำ"""
     import numpy as np
 
     from app.ai.pipeline import align
 
-    allerr: list[float] = []
+    word_err: list[float] = []
+    line_err: list[float] = []
     per: list[tuple[str, float, float, float]] = []
     for s in songs:
         ref = s.ref_lines()
@@ -31,23 +34,31 @@ def evaluate(mms, songs, verbose: bool = True) -> dict:
         except Exception as e:  # noqa: BLE001
             print(f"  {s.id}: ผิดพลาด {e}")
             continue
-        err = []
+        is_word = s.meta.get("ref_timing", "word") == "word"
+        le, we = [], []
         for ln, o in zip(ref, out):
             if not o or len(o) != len(ln["words"]):
                 continue
-            err += [abs(float(sp[0]) - float(w[1])) for w, sp in zip(ln["words"], o)]
-        if not err:
+            le.append(abs(float(o[0][0]) - float(ln["start"])))
+            if is_word:
+                we += [abs(float(sp[0]) - float(w[1])) for w, sp in zip(ln["words"], o)]
+        if not le:
             continue
-        a = np.array(err)
-        allerr += list(a)
+        line_err += le
+        word_err += we
+        a = np.array(le)
         per.append((s.id, float(np.median(a)), float((a <= 0.15).mean()), float((a <= 0.3).mean())))
         if verbose:
-            print(f"  {s.id:16s} {str(s.meta.get('title'))[:28]:28s} words={len(a):4d} median={np.median(a):.3f} ≤0.15={(a <= 0.15).mean():.0%} ≤0.3={(a <= 0.3).mean():.0%}")
-    if not allerr:
+            print(f"  {s.id:16s} {str(s.meta.get('title'))[:28]:28s} {'คำ ' if is_word else 'บรรทัด'} lines={len(a):3d} median={np.median(a):.3f} ≤0.15={(a <= 0.15).mean():.0%} ≤0.3={(a <= 0.3).mean():.0%}")
+    if not line_err:
         return {"songs": 0}
-    a = np.array(allerr)
-    return {"songs": len(per), "words": len(a), "median": float(np.median(a)), "le015": float((a <= 0.15).mean()), "le03": float((a <= 0.3).mean()),
-            "per_song_median": float(np.median([p[1] for p in per]))}
+    la = np.array(line_err)
+    res = {"songs": len(per), "lines": len(la), "median": float(np.median(la)), "le015": float((la <= 0.15).mean()), "le03": float((la <= 0.3).mean()),
+           "per_song_median": float(np.median([p[1] for p in per]))}
+    if word_err:
+        wa = np.array(word_err)
+        res.update({"words": len(wa), "word_median": float(np.median(wa)), "word_le015": float((wa <= 0.15).mean()), "word_le03": float((wa <= 0.3).mean())})
+    return res
 
 
 def load_aligner(model_path: str | None):
@@ -79,7 +90,7 @@ def main() -> int:
     args = ap.parse_args()
     from app.ai.training.data import iter_songs
 
-    songs = list(iter_songs(None if args.split == "all" else args.split, need_word=True))
+    songs = list(iter_songs(None if args.split == "all" else args.split))
     if args.limit:
         songs = songs[:args.limit]
     print(f"เพลงที่ใช้วัด: {len(songs)} ({args.split}) · โมเดล: {args.model or 'MMS_FA เดิม'}")
