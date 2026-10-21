@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import random
 import re
 import shutil
 import sys
@@ -185,11 +186,9 @@ def lyrics_ref(lyr) -> list[dict]:
     return [{"start": ln.start, "end": ln.end, "words": [[w.text, w.start, w.end] for w in ln.words]} for ln in lyr.lines]
 
 
-def process_song(ctx: dict, song: dict, lyr, level: str, yt_id: str | None, query: str, category: str = "", allow_remix: bool = False) -> str:
-    import numpy as np
-
-    from app.ai.pipeline import align, audio, stems
-    from app.ai.pipeline.match import InLine, ctc_to_result
+def fetch_song(ctx: dict, song: dict, yt_id: str | None, query: str, allow_remix: bool = False):
+    """ส่วนที่ใช้เครือข่าย/ซีพียู (ค้น YouTube → โหลดเสียง → ถอดรหัส) — รันขนานในเธรดได้ · คืน (yt_id, stereo) หรือข้อความเหตุผลที่เฟล (str)"""
+    from app.ai.pipeline import audio
 
     out = ctx["out"] / f"ne{song['id']}"
     if (out / "vocals16k.npy").exists():
@@ -205,9 +204,23 @@ def process_song(ctx: dict, song: dict, lyr, level: str, yt_id: str | None, quer
         _info, dl = yt.fetch_and_download(yt_id, tmp)
         stereo = audio.decode(str(dl.path), 44100, 2, max_seconds=700)
     except Exception as e:  # noqa: BLE001
-        shutil.rmtree(tmp, ignore_errors=True)
         return f"โหลดเสียงไม่ได้: {str(e)[:80]}"
-    shutil.rmtree(tmp, ignore_errors=True)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    return yt_id, stereo
+
+
+def process_song(ctx: dict, song: dict, lyr, level: str, fetched, category: str = "", allow_remix: bool = False) -> str:
+    """ส่วนที่ใช้การ์ดจอ (Demucs + CTC) + บันทึก · fetched = ผลจาก fetch_song"""
+    import numpy as np
+
+    from app.ai.pipeline import align, stems
+    from app.ai.pipeline.match import InLine, ctc_to_result
+
+    if isinstance(fetched, str):
+        return fetched
+    yt_id, stereo = fetched
+    out = ctx["out"] / f"ne{song['id']}"
     w = ctx["worker"]
     voc = stems.separate_vocals(w.demucs(), stereo, w.device, w.mcfg.get("demucs", {}))
     v16 = stems.to_mono_16k(voc, 44100, w.device)
@@ -277,7 +290,8 @@ def main() -> int:
     ap.add_argument("--limit", type=int, default=50, help="จำนวนเพลงสูงสุดที่ดึงรอบนี้ (โหมดไม่ใช้ --plan)")
     ap.add_argument("--queries", default="", help="ไฟล์บรรทัดละ 'ศิลปิน - ชื่อเพลง'")
     ap.add_argument("--from-db", default="", help="สำเนา sqlite ของแอป: ใช้เพลงที่เคยเล่น")
-    ap.add_argument("--sleep", type=float, default=8.0)
+    ap.add_argument("--sleep", type=float, default=2.5, help="หน่วงหลังแตะ YouTube แต่ละครั้ง (สุ่ม ±40%) ต่อเธรด")
+    ap.add_argument("--workers", type=int, default=3, help="จำนวนเธรดโหลดเสียงล่วงหน้าขนานกับการ์ดจอ")
     ap.add_argument("--batch", type=int, default=100, help="จำนวนเพลงต่อ 1 รอบ (รอบละ 100 เพลง) — ท้ายรอบจะลองเพลงที่เฟลใหม่ในรอบถัดไป")
     ap.add_argument("--max-attempts", type=int, default=3, help="ลองเพลงที่เฟลซ้ำสูงสุดกี่ครั้ง")
     ap.add_argument("--no-playlists", action="store_true")
@@ -415,12 +429,30 @@ def main() -> int:
     pos = 0
     rounds = max(1, -(-target // max(1, args.batch))) + 3      # +3: รอบของเพลย์ลิสต์ผู้ใช้ และรอบลองเพลงที่เฟลใหม่
 
-    def attempt(cat: str, song: dict, yt_id: str | None, query: str, rm: bool, lyr, level) -> bool:
+    def prepare(item):
+        """เธรดเตรียมของ: เนื้อเพลง NetEase + โหลดเสียง (ขนานกับที่การ์ดจอทำเพลงก่อนหน้า)"""
+        cat, song, yt_id, query, rm = item
+        lyr, level = netease_lyrics(song)
+        if lyr is None:
+            return item, None, None, None
+        fetched = fetch_song(ctx, song, yt_id, query, rm)
+        if not isinstance(fetched, str) or fetched.startswith("โหลดเสียงไม่ได้"):
+            time.sleep(args.sleep * random.uniform(0.6, 1.4))      # หน่วงเฉพาะเมื่อแตะ YouTube (โหลดจริง)
+        return item, lyr, level, fetched
+
+    def finish(item, lyr, level, fetched, attempts_before: int = 0) -> bool:
         nonlocal done
-        status = process_song(ctx, song, lyr, level or "line", yt_id, query, cat, rm)
+        cat, song, yt_id, query, rm = item
+        key = str(song["id"])
+        if lyr is None:       # ไม่มีเนื้อเพลง/สั้นเกินไป: ไม่ต้องลองซ้ำ
+            skipped_ids.add(key)
+            _save_json(skipped_path, {k: 1 for k in skipped_ids})
+            failed.pop(key, None)
+            return False
+        status = process_song(ctx, song, lyr, level or "line", fetched, cat, rm)
+        del fetched
         ok = status.startswith(("ผ่าน", "บันทึก", "มีแล้ว"))
         print(f"  ({cat}) {song.get('name')} — {status}  ({(time.time() - t0) / 60:.1f} นาที)", flush=True)
-        key = str(song["id"])
         if ok:
             failed.pop(key, None)
             if status != "มีแล้ว":
@@ -434,28 +466,15 @@ def main() -> int:
             rec["reason"] = status
             failed[key] = rec
         _save_json(failed_path, failed)
-        time.sleep(args.sleep)
         return ok
 
-    for rnd in range(1, rounds + 1):
-        if done >= target and not any(r["attempts"] < args.max_attempts for r in failed.values()):
-            break
-        ok_round = 0
-        print(f"\n=== รอบ {rnd}/{rounds} (เป้า {args.batch} เพลงต่อรอบ · เสร็จแล้ว {done}/{target} · ค้างรอลองใหม่ {len(failed)}) ===", flush=True)
-        # 1) ลองเพลงที่เฟลรอบก่อนใหม่ก่อน (ไม่เกิน max_attempts ครั้ง)
+    def round_items():
+        """เพลงที่จะทำในรอบนี้ตามลำดับ: เฟลรอบก่อนใหม่ก่อน แล้วเพลงใหม่ (เช็กโควตาตอนหยิบ)"""
+        nonlocal pos
         for key, rec in list(failed.items()):
-            if rec["attempts"] >= args.max_attempts or ok_round >= args.batch:
-                continue
-            lyr, level = netease_lyrics(rec["song"])
-            if lyr is None:
-                skipped_ids.add(key)
-                _save_json(skipped_path, {k: 1 for k in skipped_ids})
-                failed.pop(key, None)
-                continue
-            if attempt(rec["category"], rec["song"], rec["yt_id"], rec["query"], bool(rec["allow_remix"]), lyr, level):
-                ok_round += 1
-        # 2) เพลงใหม่ต่อจนครบรอบ
-        while pos < len(todo) and ok_round < args.batch and done < target:
+            if rec["attempts"] < args.max_attempts:
+                yield rec["category"], rec["song"], rec["yt_id"], rec["query"], bool(rec["allow_remix"])
+        while pos < len(todo):
             cat, song, yt_id, query, rm = todo[pos]
             pos += 1
             key = str(song["id"])
@@ -464,16 +483,37 @@ def main() -> int:
             if quota and got.get(cat, 0) >= quota.get(cat, 10**9):
                 continue
             seen.add(song["id"])
-            lyr, level = netease_lyrics(song)
-            if lyr is None:
-                skipped_ids.add(key)
-                _save_json(skipped_path, {k: 1 for k in skipped_ids})
-                continue
-            if attempt(cat, song, yt_id, query, rm, lyr, level):
+            yield cat, song, yt_id, query, rm
+
+    from collections import deque
+    from concurrent.futures import ThreadPoolExecutor
+
+    pool = ThreadPoolExecutor(max_workers=max(1, args.workers))
+    for rnd in range(1, rounds + 1):
+        if done >= target and not any(r["attempts"] < args.max_attempts for r in failed.values()):
+            break
+        ok_round = 0
+        print(f"\n=== รอบ {rnd}/{rounds} (เป้า {args.batch} เพลงต่อรอบ · เสร็จแล้ว {done}/{target} · ค้างรอลองใหม่ {len(failed)}) ===", flush=True)
+        it = round_items()
+        inflight: deque = deque()
+        exhausted = False
+        while True:
+            # เติมคิวเตรียมของล่วงหน้า (โหลดเสียงเพลงถัดไประหว่างที่การ์ดจอทำเพลงปัจจุบัน)
+            while not exhausted and len(inflight) < args.workers + 1 and ok_round + len(inflight) < args.batch and done + len(inflight) < target:
+                item = next(it, None)
+                if item is None:
+                    exhausted = True
+                    break
+                inflight.append(pool.submit(prepare, item))
+            if not inflight:
+                break
+            res = inflight.popleft().result()
+            if finish(*res):
                 ok_round += 1
         print(f"=== จบรอบ {rnd}: ได้ {ok_round} เพลง · ทั้งหมด {done}/{target} · ค้างรอลองใหม่ {len(failed)} (dataset/harvest_failed.json) ===", flush=True)
         if pos >= len(todo) and ok_round == 0:
             break
+    pool.shutdown()
     print(f"เสร็จ: ได้ {done} เพลง · ตามหมวด: {got} · เฟลค้าง {len(failed)} เพลง (รันซ้ำเพื่อลองใหม่)")
     return 0
 
