@@ -80,7 +80,7 @@ def main() -> int:
     ap.add_argument("--vram-frac", type=float, default=0.88, help="เพดาน VRAM ที่ PyTorch ใช้ได้ (ส่วนที่เหลือไว้ให้ Windows) — เกินแล้ว Windows ล้นไปใช้แรมเครื่อง ช้าลง 10 เท่า")
     ap.add_argument("--val-every", type=int, default=800)
     ap.add_argument("--init", default="", help="เริ่มต่อจากไฟล์น้ำหนักที่เทรนไว้ (เช่น mms_singing.pt) แทนที่จะเริ่มจาก MMS เดิม")
-    ap.add_argument("--val-songs", type=int, default=0, help="0 = ใช้เพลง val ทั้งหมด (วัดเวลาเริ่มบรรทัดทุกเพลง + เริ่มคำของเพลงเฉลยรายคำ)")
+    ap.add_argument("--val-songs", type=int, default=100, help="จำนวนเพลง val ที่ใช้วัด (เรียงเพลงเฉลยรายคำก่อน) · 0 = ทั้งหมด")
     ap.add_argument("--max-songs", type=int, default=0)
     ap.add_argument("--out", default=str(ROOT / "ai_runtime" / "models" / "mms_singing.pt"))
     args = ap.parse_args()
@@ -111,7 +111,8 @@ def main() -> int:
         model.load_state_dict(torch.load(args.init, map_location=dev))
         print(f"เริ่มต่อจาก {args.init}", flush=True)
     train_songs = list(iter_songs("train"))
-    val_songs = list(iter_songs("val"))
+    # เพลงเฉลยรายคำมาก่อน: คะแนนเลือกน้ำหนักใช้ตัวเลขรายคำ และ val โตขึ้นเรื่อยๆ จนต้องจำกัดจำนวน (วัดครั้งละ ~1.5 วิ/เพลง)
+    val_songs = sorted(iter_songs("val"), key=lambda s: s.meta.get("ref_timing", "word") != "word")
     if args.val_songs:
         val_songs = val_songs[:args.val_songs]
     if args.max_songs:
@@ -155,9 +156,18 @@ def main() -> int:
             gc.collect()
             torch.cuda.empty_cache()       # คืน VRAM ที่ค้างจากการวัดผล — ไม่งั้นเหลือไม่พอตอนเทรนแล้วล้นไปใช้แรมเครื่อง ช้าลง 5-10 เท่า
 
+    def score(r: dict) -> float:
+        """คะแนนรวมสำหรับเลือกน้ำหนักที่ดีที่สุด — เน้น "รายคำ" (เริ่มคำ + จบคำ/ลากคำ) ตามที่ใช้จริงในแอป
+        ไม่มีเพลงเฉลยรายคำใน val ค่อยใช้เวลาเริ่มบรรทัดแทน"""
+        if not r.get("songs"):
+            return -1.0
+        if r.get("words"):
+            return 2 * r["word_le015"] + r["word_le03"] + r["end_le015"] + r["dur_le015"]
+        return 2 * r["le015"] + r["le03"]
+
     base = val()
     print("ก่อนเทรน (val):", base, flush=True)
-    best = (base.get("median", 9.0), base.get("le03", 0.0)) if base.get("songs") else (9.0, 0.0)
+    best = score(base)
     log = DATASET_DIR / "train_log.jsonl"
     step = 0
     t0 = time.time()
@@ -195,15 +205,15 @@ def main() -> int:
                 with log.open("a", encoding="utf-8") as f:
                     f.write(json.dumps(rec) + "\n")
                 print("  val:", r, flush=True)
-                if r.get("songs") and (r["median"], -r["le03"]) < (best[0], -best[1]):
-                    best = (r["median"], r["le03"])
+                if score(r) > best:
+                    best = score(r)
                     torch.save(model.state_dict(), out)
-                    print(f"  ★ ดีขึ้น → บันทึก {out}", flush=True)
+                    print(f"  ★ ดีขึ้น (คะแนน {best:.4f}) → บันทึก {out}", flush=True)
             if args.max_steps and step >= args.max_steps:
                 break
         if args.max_steps and step >= args.max_steps:
             break
-    print(f"จบ: {step} ก้าว {time.time() - t0:.0f} วิ · ดีที่สุด median={best[0]:.3f} ≤0.3วิ={best[1]:.0%} · น้ำหนัก: {out if out.exists() else '(ไม่ดีกว่าของเดิม ไม่ได้บันทึก)'}")
+    print(f"จบ: {step} ก้าว {time.time() - t0:.0f} วิ · คะแนนดีที่สุด {best:.4f} · น้ำหนัก: {out if out.exists() else '(ไม่ดีกว่าของเดิม ไม่ได้บันทึก)'}")
     return 0
 
 

@@ -23,6 +23,8 @@ def evaluate(mms, songs, verbose: bool = True) -> dict:
     from app.ai.pipeline import align
 
     word_err: list[float] = []
+    end_err: list[float] = []        # เวลา "จบคำ" — บอกว่าลากคำยาวตรงกับที่ร้องไหม
+    dur_err: list[float] = []        # ความยาวคำ (จบ-เริ่ม) คลาดเท่าไร
     line_err: list[float] = []
     per: list[tuple[str, float, float, float]] = []
     for s in songs:
@@ -35,17 +37,22 @@ def evaluate(mms, songs, verbose: bool = True) -> dict:
             print(f"  {s.id}: ผิดพลาด {e}")
             continue
         is_word = s.meta.get("ref_timing", "word") == "word"
-        le, we = [], []
+        le, we, ee, de = [], [], [], []
         for ln, o in zip(ref, out):
             if not o or len(o) != len(ln["words"]):
                 continue
             le.append(abs(float(o[0][0]) - float(ln["start"])))
             if is_word:
-                we += [abs(float(sp[0]) - float(w[1])) for w, sp in zip(ln["words"], o)]
+                for w, sp in zip(ln["words"], o):
+                    we.append(abs(float(sp[0]) - float(w[1])))
+                    ee.append(abs(float(sp[1]) - float(w[2])))
+                    de.append(abs((float(sp[1]) - float(sp[0])) - (float(w[2]) - float(w[1]))))
         if not le:
             continue
         line_err += le
         word_err += we
+        end_err += ee
+        dur_err += de
         a = np.array(le)
         per.append((s.id, float(np.median(a)), float((a <= 0.15).mean()), float((a <= 0.3).mean())))
         if verbose:
@@ -56,8 +63,10 @@ def evaluate(mms, songs, verbose: bool = True) -> dict:
     res = {"songs": len(per), "lines": len(la), "median": float(np.median(la)), "le015": float((la <= 0.15).mean()), "le03": float((la <= 0.3).mean()),
            "per_song_median": float(np.median([p[1] for p in per]))}
     if word_err:
-        wa = np.array(word_err)
-        res.update({"words": len(wa), "word_median": float(np.median(wa)), "word_le015": float((wa <= 0.15).mean()), "word_le03": float((wa <= 0.3).mean())})
+        wa, ea, da = np.array(word_err), np.array(end_err), np.array(dur_err)
+        res.update({"words": len(wa), "word_median": float(np.median(wa)), "word_le015": float((wa <= 0.15).mean()), "word_le03": float((wa <= 0.3).mean()),
+                    "end_median": float(np.median(ea)), "end_le015": float((ea <= 0.15).mean()),
+                    "dur_median": float(np.median(da)), "dur_le015": float((da <= 0.15).mean())})
     return res
 
 
