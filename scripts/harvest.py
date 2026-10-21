@@ -307,6 +307,8 @@ def main() -> int:
     ap.add_argument("--batch", type=int, default=100, help="จำนวนเพลงต่อ 1 รอบ (รอบละ 100 เพลง) — ท้ายรอบจะลองเพลงที่เฟลใหม่ในรอบถัดไป")
     ap.add_argument("--max-attempts", type=int, default=3, help="ลองเพลงที่เฟลซ้ำสูงสุดกี่ครั้ง")
     ap.add_argument("--cookies-dir", default="", help="โฟลเดอร์ไฟล์ cookies.txt (หลายบัญชี) ที่จะหมุนใช้สลับกันทีละเพลง · ไม่ใส่ = ใช้ cookies ของแอป")
+    ap.add_argument("--word-only", action="store_true", help="เก็บเฉพาะเพลงที่เฉลยเป็นเวลารายคำจริง (ใช้เพิ่มชุดวัดผล/สอนให้แม่นขึ้น)")
+    ap.add_argument("--max-new", type=int, default=0, help="หยุดเมื่อได้เพลงใหม่ครบเท่านี้ (นับต่อจากที่มีอยู่) แทนเป้าทั้งหมดของ --plan")
     ap.add_argument("--no-playlists", action="store_true")
     ap.add_argument("--yt-playlist", action="append", default=[], help="เพลย์ลิสต์ YouTube เพิ่ม (ใส่ซ้ำได้) — ดึงก่อนทุกอย่าง")
     ap.add_argument("--list", action="store_true", help="แค่แสดงรายการเพลงที่จะดึง (ไม่โหลด ไม่ใช้การ์ดจอ)")
@@ -455,6 +457,8 @@ def main() -> int:
             continue
         got[c] = got.get(c, 0) + 1
     done = sum(v for k, v in got.items() if k != "playlist")
+    if args.max_new:
+        target = done + args.max_new
     seen: set[int] = set()
     t0 = time.time()
     pos = 0
@@ -479,6 +483,8 @@ def main() -> int:
         lyr, level = netease_lyrics(song)
         if lyr is None:
             return item, None, None, None
+        if args.word_only and level != "word":
+            return item, False, None, None      # ข้ามเพลงที่เฉลยเป็นระดับบรรทัด (ไม่บันทึกว่าเฟล/ไม่มีเนื้อ)
         fetched = None
         for _try in range(4):
             wait_gate()
@@ -500,6 +506,8 @@ def main() -> int:
         nonlocal done
         cat, song, yt_id, query, rm = item
         key = str(song["id"])
+        if lyr is False:      # --word-only: ข้ามเพลงเฉลยระดับบรรทัด
+            return False
         if lyr is None:       # ไม่มีเนื้อเพลง/สั้นเกินไป: ไม่ต้องลองซ้ำ
             skipped_ids.add(key)
             _save_json(skipped_path, {k: 1 for k in skipped_ids})
@@ -567,7 +575,7 @@ def main() -> int:
             if not inflight:
                 break
             item, lyr, level, fetched = inflight.popleft().result()
-            sep = separate_song(ctx, fetched) if lyr is not None else None
+            sep = separate_song(ctx, fetched) if lyr is not None and lyr is not False else None
             del fetched
             pending2.append(gpu2.submit(finish, item, lyr, level, sep))
             del sep
