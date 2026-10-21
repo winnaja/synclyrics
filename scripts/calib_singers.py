@@ -183,16 +183,125 @@ def report(min_lines: int) -> None:
         print("   ทางที่เหลือ: ปิดการแยกซ้าย/ขวาอัตโนมัติ หรือหาป้ายจริง (ผู้ใช้ระบุเพลงคู่/เดี่ยว) แล้วเทรนตัวแยกเอง")
 
 
+def selftest(pairs: int) -> None:
+    """ตรวจว่า "ลายเสียง" ใช้ได้กับเสียงร้องจริงไหม — เอาสองเพลงของคนละศิลปินมาปนกันแล้วให้จัด 2 กลุ่ม
+    ถ้าแยกกลับเป็นเพลงใครเพลงมันได้ แปลว่าลายเสียงใช้ได้ (ปัญหาอยู่ที่ป้ายคำตอบ/โครงสร้างเพลงคู่)
+    ถ้าแยกไม่ได้ แปลว่าวิธีนี้ใช้กับเสียงร้องไม่ได้ตั้งแต่ต้น"""
+    import random
+
+    import numpy as np
+
+    from app.ai.pipeline import speakers
+    from app.ai.training.data import iter_songs
+
+    got = []
+    for s in iter_songs(None):
+        if (s.dir / EMB_NAME).exists():
+            got.append((s.meta.get("artist") or "?", np.load(s.dir / EMB_NAME)))
+    if len(got) < 4:
+        print("ลายเสียงที่เก็บไว้ยังน้อยเกินไป")
+        return
+    random.seed(0)
+    purities = []
+    for _ in range(pairs):
+        (a1, e1), (a2, e2) = random.sample(got, 2)
+        if a1 == a2:
+            continue
+        n = min(len(e1), len(e2), 20)
+        mat = np.concatenate([e1[:n], e2[:n]])
+        labels, _ = speakers.cluster_two(mat)
+        truth = np.array([0] * n + [1] * n)
+        acc = max((labels == truth).mean(), (labels != truth).mean())
+        purities.append(float(acc))
+    p = np.array(purities)
+    print(f"ทดสอบแยก 'สองเพลงคนละศิลปิน' {len(p)} คู่: แยกถูกเฉลี่ย {p.mean():.1%} (มัธยฐาน {np.median(p):.1%}) · สุ่มเดา = 50%")
+    if p.mean() > 0.85:
+        print(">> ลายเสียงใช้ได้กับเสียงร้อง — ที่แยกเพลงคู่ไม่ได้จึงมาจากป้ายคำตอบที่ไม่แน่นอน หรือเพลงคู่แยกยากจริง")
+    elif p.mean() > 0.7:
+        print(">> ลายเสียงพอใช้ได้แต่ไม่ชัด — เพลงคู่ที่เสียงคล้ายกันย่อมแยกไม่ออก")
+    else:
+        print(">> ลายเสียงแยกแม้แต่คนละศิลปินยังไม่ได้ — วิธีนี้ใช้กับเสียงร้องไม่ได้ ต้องเปลี่ยนวิธีหรือปิดฟีเจอร์")
+
+
+def synth(n: int) -> None:
+    """หาเกณฑ์ด้วย "เพลงคู่ที่สร้างขึ้นเอง" ซึ่งรู้คำตอบแน่นอน (ป้ายจากชื่อศิลปินไม่น่าเชื่อถือ)
+
+    บวก = สลับท่อนของสองเพลงจากคนละศิลปิน (มีสองคนแน่นอน) · ลบ = เพลงเดี่ยวจริงทั้งเพลง (น่าจะมีคนเดียว)
+    ข้อจำกัด: คู่ที่สร้างเองง่ายกว่าเพลงคู่จริง (คนละการอัด/คีย์/โปรดักชัน) เกณฑ์ที่ได้จึงมองโลกในแง่ดีไปบ้าง
+    แต่ฝั่ง "เพลงเดี่ยวถูกตีเป็นดูเอ็ต" เป็นของจริง ใช้คุมไม่ให้เกณฑ์หลวมเกินได้
+    """
+    import random
+
+    import numpy as np
+
+    from app.ai.pipeline import speakers
+    from app.ai.training.data import iter_songs
+
+    pool = []
+    for s in iter_songs(None):
+        if (s.dir / EMB_NAME).exists():
+            pool.append((s.meta.get("artist") or "?", label_of(s.meta), np.load(s.dir / EMB_NAME),
+                         np.load(s.dir / DUR_NAME)))
+    solos = [p for p in pool if p[1] == "solo"]
+    if len(solos) < 4:
+        print("เพลงเดี่ยวที่เก็บลายเสียงไว้ยังน้อยเกินไป")
+        return
+    random.seed(1)
+    pos, neg = [], []
+    for _ in range(n):       # บวก: สลับท่อนละ 4 บรรทัดระหว่างสองเพลงคนละศิลปิน
+        (a1, _, e1, d1), (a2, _, e2, d2) = random.sample(solos, 2)
+        if a1 == a2:
+            continue
+        m = min(len(e1), len(e2))
+        if m < speakers.MIN_LINES:
+            continue
+        embs, durs = [], []
+        for start in range(0, m - 3, 4):
+            src = (e1, d1) if (start // 4) % 2 == 0 else (e2, d2)
+            embs += list(src[0][start:start + 4])
+            durs += list(src[1][start:start + 4])
+        pos.append(features(np.stack(embs), np.array(durs)))
+    for _, _, e, d in solos[:n]:       # ลบ: เพลงเดี่ยวทั้งเพลง
+        if len(e) >= speakers.MIN_LINES:
+            neg.append(features(e, d))
+    print(f"คู่ที่สร้างเอง (มีสองคนแน่นอน) {len(pos)} · เพลงเดี่ยวจริง {len(neg)}")
+    for k in ("csim", "minor_frac", "switch_rate", "sep"):
+        print(f"  {k:12s} AUC {auc([r[k] for r in pos], [r[k] for r in neg]):.3f}"
+              f"   คู่ {np.median([r[k] for r in pos]):.3f} | เดี่ยว {np.median([r[k] for r in neg]):.3f}")
+
+    def bal(pred):
+        return ((sum(pred(r) for r in pos) / len(pos)) + (sum(not pred(r) for r in neg) / len(neg))) / 2, \
+               sum(pred(r) for r in pos) / len(pos), sum(not pred(r) for r in neg) / len(neg)
+    cur = bal(lambda r: r["csim"] < 0.50 and r["minor_frac"] >= 0.12)
+    print(f"\nเกณฑ์ปัจจุบัน 0.50/0.12: เฉลี่ย {cur[0]:.0%} (จับคู่ได้ {cur[1]:.0%} · เดี่ยวไม่ถูกตีผิด {cur[2]:.0%})")
+    best = None
+    for sim in np.arange(0.30, 0.92, 0.01):
+        for frac in (0.08, 0.12, 0.18, 0.25, 0.30):
+            r3 = bal(lambda r, s=sim, f=frac: r["csim"] < s and r["minor_frac"] >= f)
+            if best is None or r3[0] > best[0][0]:
+                best = (r3, float(sim), frac)
+    (b, tpr, tnr), sim, frac = best
+    print(f"เกณฑ์ที่ดีที่สุด SPLIT_SIM {sim:.2f} · MIN_MINOR_FRAC {frac}: เฉลี่ย {b:.0%} (จับคู่ได้ {tpr:.0%} · เดี่ยวไม่ถูกตีผิด {tnr:.0%})")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
+    ap.add_argument("--synth", type=int, default=0, help="จำนวนคู่เพลงสังเคราะห์ที่ใช้หาเกณฑ์ (รู้คำตอบแน่นอน)")
     ap.add_argument("--embed", action="store_true")
     ap.add_argument("--report", action="store_true")
+    ap.add_argument("--selftest", type=int, default=0, help="จำนวนคู่เพลงที่ใช้ทดสอบว่าลายเสียงใช้ได้จริงไหม")
     ap.add_argument("--limit", type=int, default=400)
     ap.add_argument("--min-lines", type=int, default=12)
     ap.add_argument("--device", default="cpu", help="cpu = ไม่แย่งการ์ดจอกับการเทรน")
     args = ap.parse_args()
     if args.embed:
         return embed_all(args.limit, args.device)
+    if args.selftest:
+        selftest(args.selftest)
+        return 0
+    if args.synth:
+        synth(args.synth)
+        return 0
     report(args.min_lines)
     return 0
 
