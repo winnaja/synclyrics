@@ -25,6 +25,8 @@ def evaluate(mms, songs, verbose: bool = True) -> dict:
     word_err: list[float] = []
     end_err: list[float] = []        # เวลา "จบคำ" — บอกว่าลากคำยาวตรงกับที่ร้องไหม
     dur_err: list[float] = []        # ความยาวคำ (จบ-เริ่ม) คลาดเท่าไร
+    end_signed: list[float] = []     # เครื่องหมาย: ลบ = ตัดจบคำเร็วไป (CTC มักพุ่งแล้วดับ) · บวก = ลากยาวเกิน
+    start_signed: list[float] = []
     line_err: list[float] = []
     per: list[tuple[str, float, float, float]] = []
     for s in songs:
@@ -37,7 +39,7 @@ def evaluate(mms, songs, verbose: bool = True) -> dict:
             print(f"  {s.id}: ผิดพลาด {e}")
             continue
         is_word = s.meta.get("ref_timing", "word") == "word"
-        le, we, ee, de = [], [], [], []
+        le, we, ee, de, es, ss = [], [], [], [], [], []
         for ln, o in zip(ref, out):
             if not o or len(o) != len(ln["words"]):
                 continue
@@ -47,12 +49,16 @@ def evaluate(mms, songs, verbose: bool = True) -> dict:
                     we.append(abs(float(sp[0]) - float(w[1])))
                     ee.append(abs(float(sp[1]) - float(w[2])))
                     de.append(abs((float(sp[1]) - float(sp[0])) - (float(w[2]) - float(w[1]))))
+                    es.append(float(sp[1]) - float(w[2]))
+                    ss.append(float(sp[0]) - float(w[1]))
         if not le:
             continue
         line_err += le
         word_err += we
         end_err += ee
         dur_err += de
+        end_signed += es
+        start_signed += ss
         a = np.array(le)
         per.append((s.id, float(np.median(a)), float((a <= 0.15).mean()), float((a <= 0.3).mean())))
         if verbose:
@@ -66,7 +72,8 @@ def evaluate(mms, songs, verbose: bool = True) -> dict:
         wa, ea, da = np.array(word_err), np.array(end_err), np.array(dur_err)
         res.update({"words": len(wa), "word_median": float(np.median(wa)), "word_le015": float((wa <= 0.15).mean()), "word_le03": float((wa <= 0.3).mean()),
                     "end_median": float(np.median(ea)), "end_le015": float((ea <= 0.15).mean()),
-                    "dur_median": float(np.median(da)), "dur_le015": float((da <= 0.15).mean())})
+                    "dur_median": float(np.median(da)), "dur_le015": float((da <= 0.15).mean()),
+                    "end_bias": float(np.median(end_signed)), "start_bias": float(np.median(start_signed))})
     return res
 
 
