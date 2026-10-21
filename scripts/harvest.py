@@ -34,6 +34,11 @@ SEED_PLAYLISTS = [
     (3778678, "热歌榜"), (3779629, "新歌榜"), (2884035, "原创榜"), (991319590, "中文说唱榜"), (71385702, "ACG榜"),
 ]
 
+# เพลย์ลิสต์ YouTube ของผู้ใช้ที่ต้องดึงทั้งหมดก่อนเสมอ (ไม่นับในโควตาหมวด) — เสียงมาจากวิดีโอในเพลย์ลิสต์โดยตรง ส่วนเนื้อเพลงหาจาก NetEase ตามชื่อ
+YT_PLAYLISTS = [
+    "https://www.youtube.com/playlist?list=PLo_kKd-WztIbIfInm6F8g38MM5CYpg0RG",    # "K" (K-pop ของผู้ใช้ ~94 เพลง)
+]
+
 # แผนหมวด: สัดส่วนของจำนวนเพลงรวม · playlists = id ที่ตรวจแล้ว · keywords = ค้นเพลย์ลิสต์ NetEase แล้วเอาอันที่คนฟังมากสุดไม่เกิน top
 # ช้า/เร็ว: หมวดต่างๆ ผสมเพลย์ลิสต์เพลงช้า (慢歌) และเพลงเร็ว (快歌/DJ) · remix = Douyin DJ remix
 PLAN: dict[str, dict] = {
@@ -96,6 +101,58 @@ def netease_lyrics(song: dict):
     if cand is None or len(cand.lyrics.lines) < MIN_LINES:
         return None, None
     return cand.lyrics, ("word" if cand.lyrics.timing.value == "word" else "line")
+
+
+def youtube_playlist_entries(yt, url: str) -> list[dict]:
+    """รายการวิดีโอในเพลย์ลิสต์ YouTube (ไม่โหลดเสียง) -> [{id,title,channel,duration}]"""
+    res, _ = yt._run(lambda ydl: ydl.extract_info(url, download=False), extract_flat=True)
+    out = []
+    for e in (res or {}).get("entries") or []:
+        if e and e.get("id") and e.get("duration"):
+            out.append({"id": e["id"], "title": e.get("title") or "", "channel": (e.get("channel") or e.get("uploader") or "").replace(" - Topic", ""),
+                        "duration": float(e["duration"])})
+    return out
+
+
+def _plain(text: str) -> str:
+    return re.sub(r"[\W_]+", "", re.sub(r"[\(\[（].*?[\)\]）]", "", text).casefold())
+
+
+def match_netease_for_video(entry: dict, tol_s: float = 12.0) -> dict | None:
+    """วิดีโอ YouTube -> เพลง NetEase ที่ชื่อ/ศิลปินตรงและความยาวใกล้กัน (MV ยาวกว่าเสียงได้ เผื่อ ~12 วิ)
+    ให้คะแนน: ชื่อตรงเป๊ะ (ไม่นับวงเล็บ) > ขึ้นต้นตรง · ศิลปินตรงกับช่อง · ความยาวใกล้ · ตัดฉบับ Live/Remix/Inst ที่วิดีโอไม่ได้ระบุ · ไม่เจอที่น่าเชื่อถือ = None"""
+    want = _plain(entry["title"])
+    chan = entry["channel"].casefold()
+    bad_in_video = bool(BAD_WORDS.search(entry["title"]))
+    best: tuple[float, dict] | None = None
+    for q in (f"{entry['channel']} {entry['title']}", entry["title"]):
+        d = http_json("https://music.163.com/api/search/get", {"s": q, "type": 1, "limit": 8, "offset": 0})
+        for s_ in ((d or {}).get("result") or {}).get("songs") or []:
+            dur = (s_.get("duration") or s_.get("dt") or 0) / 1000.0
+            if not dur or abs(dur - entry["duration"]) > tol_s:
+                continue
+            name = s_.get("name") or ""
+            if BAD_WORDS.search(name) and not bad_in_video:
+                continue
+            nm = _plain(name)
+            if not nm or not want:
+                continue
+            score = 0.0
+            if nm == want:
+                score += 10.0
+            elif nm.startswith(want) or want.startswith(nm):
+                score += 4.0
+            else:
+                continue
+            arts = " ".join(a.get("name", "") for a in artists_of(s_)).casefold()
+            if chan and (chan in arts or arts in chan or any(tok and tok in arts for tok in chan.split())):
+                score += 3.0
+            score -= abs(dur - entry["duration"]) / 12.0
+            if best is None or score > best[0]:
+                best = (score, s_)
+        if best is not None and best[0] >= 10.0:
+            break
+    return best[1] if best else None
 
 
 def search_song(query: str) -> dict | None:
@@ -222,6 +279,7 @@ def main() -> int:
     ap.add_argument("--from-db", default="", help="สำเนา sqlite ของแอป: ใช้เพลงที่เคยเล่น")
     ap.add_argument("--sleep", type=float, default=8.0)
     ap.add_argument("--no-playlists", action="store_true")
+    ap.add_argument("--yt-playlist", action="append", default=[], help="เพลย์ลิสต์ YouTube เพิ่ม (ใส่ซ้ำได้) — ดึงก่อนทุกอย่าง")
     ap.add_argument("--list", action="store_true", help="แค่แสดงรายการเพลงที่จะดึง (ไม่โหลด ไม่ใช้การ์ดจอ)")
     args = ap.parse_args()
 
@@ -236,6 +294,21 @@ def main() -> int:
     if args.plan:
         plan_items = build_plan(args.plan)
     if args.list:
+        from app.audio.decoder import find_ffmpeg as _ff
+        from app.core.paths import get_paths as _gp
+        from app.media.youtube import YouTubeClient as _YT
+
+        _paths, _f = _gp(), _ff()
+        _yt = _YT(_paths.cookies_file, ffmpeg_dir=_f.parent if _f else None)
+        pl_lines = []
+        for url in list(YT_PLAYLISTS) + list(args.yt_playlist):
+            for en in youtube_playlist_entries(_yt, url):
+                song = match_netease_for_video(en)
+                pl_lines.append(f"[playlist] {en['channel']} - {en['title']} -> " + (f"NetEase {song['id']} {song['name']}" if song else "ไม่เจอเนื้อเพลง NetEase ที่ตรงกัน") + (" [มีแล้ว]" if song and exists(song) else ""))
+        if pl_lines:
+            DATASET_DIR.mkdir(parents=True, exist_ok=True)
+            (DATASET_DIR / "harvest_playlist.txt").write_text("\n".join(pl_lines), encoding="utf-8")
+            print(f"เพลย์ลิสต์ของคุณ: {len(pl_lines)} วิดีโอ จับคู่เนื้อเพลงได้ {sum(1 for l in pl_lines if 'ไม่เจอ' not in l)} (รายละเอียด dataset/harvest_playlist.txt)")
         if plan_items:
             lines = []
             for i, (cat, t, rm) in enumerate(plan_items, 1):
@@ -282,6 +355,19 @@ def main() -> int:
     ctx["out"].mkdir(parents=True, exist_ok=True)
 
     todo: list[tuple[str, dict, str | None, str, bool]] = []      # (หมวด, เพลง NetEase, youtube id หรือ None, คำค้น, อนุญาตรีมิกซ์)
+    for url in list(YT_PLAYLISTS) + list(args.yt_playlist):      # เพลย์ลิสต์ของผู้ใช้: ก่อนทุกอย่าง
+        try:
+            entries = youtube_playlist_entries(yt, url)
+        except Exception as e:  # noqa: BLE001
+            print(f"อ่านเพลย์ลิสต์ไม่ได้ ({str(e)[:80]}): {url}")
+            continue
+        found = 0
+        for en in entries:
+            song = match_netease_for_video(en)
+            if song:
+                todo.append(("playlist", song, en["id"], f"{en['channel']} {en['title']}", False))
+                found += 1
+        print(f"เพลย์ลิสต์ {url[-34:]}: {len(entries)} วิดีโอ จับคู่เนื้อเพลง NetEase ได้ {found}", flush=True)
     if args.from_db:
         import sqlite3
 
@@ -328,7 +414,8 @@ def main() -> int:
         status = process_song(ctx, song, lyr, level or "line", yt_id, query, cat, rm)
         print(f"[{done + 1}/{target}] ({cat}) {song.get('name')} — {status}  ({(time.time() - t0) / 60:.1f} นาที)", flush=True)
         if status.startswith(("ผ่าน", "บันทึก")):
-            done += 1
+            if cat != "playlist":
+                done += 1          # เพลงในเพลย์ลิสต์ของผู้ใช้ไม่นับเข้าเป้าหมายแผนหมวด
             got[cat] = got.get(cat, 0) + 1
         time.sleep(args.sleep)
     print(f"เสร็จ: เพิ่ม {done} เพลง, ข้าม (ไม่มีเนื้อ) {skipped} · ตามหมวด: {got}")
