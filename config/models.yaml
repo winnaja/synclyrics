@@ -30,7 +30,7 @@ align:                    # torchaudio MMS_FA
   global_align: false          # จัดเวลาทั้งเพลงด้วย CTC เทียบกับผล Whisper (วัดแล้วยังไม่เพิ่มบรรทัดที่จับคู่ได้ + ช้าลง ~15 วิ ปิดไว้ก่อน)
   global_min_confidence: 0.5
   global_switch_gain: 0.15
-  finetuned: ""            # ไฟล์น้ำหนัก MMS ที่ fine-tune กับเสียงร้อง (scripts/train_ctc.py) เช่น ai_runtime/models/mms_singing.pt · ว่าง = MMS เดิม
+  finetuned: ai_runtime/models/mms_singing.pt   # ไฟล์น้ำหนัก MMS ที่ fine-tune กับเสียงร้อง (scripts/train_ctc.py) เช่น ai_runtime/models/mms_singing.pt · ว่าง = MMS เดิม
 
 whisper:                  # faster-whisper (ใช้เมื่อไม่มีเนื้อเพลง หรือไม่มีเวลาบรรทัด)
   enabled: true
@@ -80,4 +80,4 @@ analysis:                 # การฟังเสียงเบื้อง�
   reconstruct_below: 0.5  # จับคู่ตามลำดับได้น้อยกว่านี้ ลองสร้างบรรทัดตามลำดับที่ร้องจริง (รีมิกซ์/โครงสร้างต่าง)
   reconstruct_gain: 0.08  # ใช้ผลที่สร้างตามเสียงจริงเมื่อจับคู่ข้อความได้มากกว่าแบบเรียงลำดับอย่างน้อยเท่านี้
   transcript_version: 2   # เปลี่ยนเมื่อวิธีแยกเสียง/ถอดเสียงเปลี่ยน -> ต้องฟังเสียงใหม่ (ไม่เกี่ยวกับ algo_version)
-  algo_version: 5         # เปลี่ยนเมื่อวิธีจัดเวลาเปลี่ยน -> ผลที่เก็บไว้เก่าหมดอายุ
+  algo_version: 6         # เปลี่ยนเมื่อวิธีจัดเวลาเปลี่ยน -> ผลที่เก็บไว้เก่าหมดอายุ

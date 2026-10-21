@@ -414,7 +414,7 @@ class AlignCfg(_Model):
     global_align: bool = False   # จัดเวลาทั้งเพลงด้วย CTC เทียบกับผล Whisper (ทดลอง ปิดไว้: ยังไม่เพิ่มบรรทัดที่จับคู่ได้)
     global_min_confidence: float = 0.5
     global_switch_gain: float = 0.15
-    finetuned: str = ""          # ไฟล์น้ำหนัก MMS ที่ fine-tune กับเสียงร้อง (scripts/train_ctc.py) เช่น ai_runtime/models/mms_singing.pt · ว่าง = MMS เดิม
+    finetuned: str = "ai_runtime/models/mms_singing.pt"          # ไฟล์น้ำหนัก MMS ที่ fine-tune กับเสียงร้อง (scripts/train_ctc.py) เช่น ai_runtime/models/mms_singing.pt · ว่าง = MMS เดิม
 
 
 class WhisperCfg(_Model):
@@ -474,7 +474,7 @@ class AnalysisCfg(_Model):
     reconstruct_below: float = 0.5   # จับคู่ตามลำดับได้น้อยกว่านี้ ลองสร้างบรรทัดตามลำดับที่ร้องจริง (รีมิกซ์/โครงสร้างต่าง)
     reconstruct_gain: float = 0.08   # ใช้ผลที่สร้างตามเสียงจริงเมื่อจับคู่ข้อความได้มากกว่าแบบเรียงลำดับอย่างน้อยเท่านี้
     transcript_version: int = 2  # เปลี่ยนเมื่อวิธีแยกเสียง/ถอดเสียงเปลี่ยน -> ต้องฟังเสียงใหม่ (ไม่เกี่ยวกับ algo_version)
-    algo_version: int = 5       # เปลี่ยนเมื่อวิธีจัดเวลาเปลี่ยน -> ผลที่เก็บไว้เก่าหมดอายุ
+    algo_version: int = 6       # เปลี่ยนเมื่อวิธีจัดเวลาเปลี่ยน -> ผลที่เก็บไว้เก่าหมดอายุ
 
 
 class ModelsConfig(_Model):

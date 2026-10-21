@@ -46,12 +46,19 @@ def load_model(config: dict[str, Any], device: str) -> dict[str, Any]:
     model = bundle.get_model(with_star=False)
     ft = config.get("finetuned") or ""
     if ft:   # น้ำหนักที่ fine-tune กับเสียงร้อง (scripts/train_ctc.py) — ไม่มีไฟล์ = ใช้ MMS เดิม
-        import os
+        import logging
+        from pathlib import Path
 
         import torch
 
-        if os.path.exists(ft):
-            model.load_state_dict(torch.load(ft, map_location="cpu"))
+        # เส้นทางสัมพัทธ์ = เทียบกับโฟลเดอร์โปรเจกต์ (ไม่ผูกกับโฟลเดอร์ที่สั่งรัน ไม่งั้นแอปเปิดจากที่อื่นแล้วเงียบ ๆ ไปใช้ MMS เดิม)
+        root = Path(__file__).resolve().parents[3]
+        path = next((c for c in (Path(ft), root / ft) if c.is_file()), None)
+        if path is not None:
+            model.load_state_dict(torch.load(path, map_location="cpu"))
+            logging.getLogger(__name__).info("ใช้น้ำหนัก MMS ที่ fine-tune: %s", path)
+        else:
+            logging.getLogger(__name__).warning("ไม่พบไฟล์น้ำหนัก fine-tune %s — ใช้ MMS เดิม", ft)
     model = model.to(device)
     model.eval()
     uroman = None
