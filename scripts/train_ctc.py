@@ -135,8 +135,14 @@ def main() -> int:
 
     def val() -> dict:
         model.eval()
-        with torch.inference_mode():
-            return evaluate(mms, val_songs, verbose=False) if val_songs else {"songs": 0}
+        torch.cuda.empty_cache()
+        try:
+            with torch.inference_mode():
+                return evaluate(mms, val_songs, verbose=False) if val_songs else {"songs": 0}
+        except torch.OutOfMemoryError:
+            torch.cuda.empty_cache()
+            print("  (วัดผลรอบนี้ VRAM ไม่พอ — ข้าม)", flush=True)
+            return {"songs": 0}
 
     base = val()
     print("ก่อนเทรน (val):", base, flush=True)
