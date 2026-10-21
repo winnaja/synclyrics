@@ -269,16 +269,44 @@ def align_global(bundle: dict[str, Any], vocals16: np.ndarray, line_words: list[
         return out
     sec = FRAME_SAMPLES / SAMPLE_RATE
     k = 0
-    for li, wl in enumerate(words_tok):
-        res: list[tuple[float, float, float] | None] = []
+    raw: list[list[tuple[list[Any], float, float] | None]] = []      # ต่อบรรทัด: (token ของคำ, เริ่ม, จบ)
+    for wl in words_tok:
+        line: list[tuple[list[Any], float, float] | None] = []
         for ids in wl:
             if not ids:
-                res.append(None)
+                line.append(None)
                 continue
             grp = spans[k:k + len(ids)]
             k += len(ids)
-            gs, ge = grp[0].start * sec, max(grp[-1].end * sec, grp[0].start * sec + 0.04)
-            res.append(Span(gs, ge, float(sum(sp.score for sp in grp) / len(grp)), _curve(grp, 0.0, sec, gs, ge)))
+            line.append((grp, grp[0].start * sec, max(grp[-1].end * sec, grp[0].start * sec + 0.04)))
+        raw.append(line)
+    _hold_notes(raw)
+    for li, line in enumerate(raw):
+        res: list[tuple[float, float, float] | None] = [
+            None if w is None else Span(w[1], w[2], float(sum(sp.score for sp in w[0]) / len(w[0])), _curve(w[0], 0.0, sec, w[1], w[2]))
+            for w in line]
         if any(r is not None for r in res):
             out[li] = _fill_gaps(res, next(r[0] for r in res if r), next(r[1] for r in reversed(res) if r))
     return out
+
+
+HOLD_TAIL_S = 0.14      # คำสุดท้ายของบรรทัดลากต่อได้เท่านี้ (ค่าที่วัดได้ว่า CTC ตัดจบคำเร็วไปโดยเฉลี่ย)
+
+
+def _hold_notes(raw: list[list[tuple[list[Any], float, float] | None]]) -> None:
+    """ยืด "เวลาจบคำ" ให้ต่อเนื่องถึงคำถัดไป (แก้ในที่)
+
+    CTC พุ่งขึ้นตอนเจอตัวอักษรแล้วดับทันที จบคำจึงเร็วกว่าที่ร้องจริงราว 0.14 วิ ขณะที่คำหนึ่งยาวเฉลี่ย 0.30 วิ
+    เฉลยของมนุษย์ (NetEase YRC) 99% ให้คำจบตรงที่คำถัดไปเริ่มพอดี — เสียงร้องลากค้างถึงคำต่อไป ไม่ได้เงียบ
+    """
+    flat = [(li, wi) for li, line in enumerate(raw) for wi, w in enumerate(line) if w is not None]
+    for n, (li, wi) in enumerate(flat):
+        grp, gs, ge = raw[li][wi]       # type: ignore[misc]
+        if n + 1 < len(flat):
+            nli, nwi = flat[n + 1]
+            nxt = raw[nli][nwi][1]      # type: ignore[index]
+            # ในบรรทัดเดียวกัน = ต่อเนื่องถึงคำถัดไป · ข้ามบรรทัด = ลากได้แต่ห้ามชนบรรทัดถัดไป (มีช่วงพักจริง)
+            ge = max(gs + 0.04, nxt if nli == li else min(ge + HOLD_TAIL_S, nxt))
+        else:
+            ge = ge + HOLD_TAIL_S
+        raw[li][wi] = (grp, gs, ge)
