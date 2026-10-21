@@ -23,6 +23,7 @@ import random
 import re
 import shutil
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -193,7 +194,7 @@ def fetch_song(ctx: dict, song: dict, yt_id: str | None, query: str, allow_remix
     out = ctx["out"] / f"ne{song['id']}"
     if (out / "vocals16k.npy").exists():
         return "มีแล้ว"
-    yt = ctx["yt"]
+    yt = ctx["yt"]()
     if yt_id is None:
         picked = pick_youtube(yt, song, query, allow_remix)
         if picked is None:
@@ -366,14 +367,28 @@ def main() -> int:
     worker.emit = lambda *a, **k: None  # type: ignore[assignment]
     worker.setup()
     ff = find_ffmpeg()
-    yt = YouTubeClient(paths.cookies_file, ffmpeg_dir=ff.parent if ff else None)
-    ctx = {"out": done_dir, "tmp": ROOT / "dataset" / "_tmp", "worker": worker, "yt": yt}
+    tmp_root = ROOT / "dataset" / "_tmp"
+    tmp_root.mkdir(parents=True, exist_ok=True)
+    local = threading.local()
+
+    def yt_client():
+        """yt-dlp เขียน cookies กลับไฟล์ตอนปิด: หลายเธรดแชร์ไฟล์เดียวจะเขียนทับกันจนไฟล์พัง (และไฟล์ของแอปด้วย)
+        → แต่ละเธรดใช้สำเนาของตัวเอง ไม่แตะไฟล์จริง"""
+        c = getattr(local, "yt", None)
+        if c is None:
+            mine = tmp_root / f"cookies_{threading.get_ident()}.txt"
+            if paths.cookies_file.exists():
+                shutil.copyfile(paths.cookies_file, mine)
+            c = local.yt = YouTubeClient(mine, ffmpeg_dir=ff.parent if ff else None)
+        return c
+
+    ctx = {"out": done_dir, "tmp": tmp_root, "worker": worker, "yt": yt_client}
     ctx["out"].mkdir(parents=True, exist_ok=True)
 
     todo: list[tuple[str, dict, str | None, str, bool]] = []      # (หมวด, เพลง NetEase, youtube id หรือ None, คำค้น, อนุญาตรีมิกซ์)
     for url in list(YT_PLAYLISTS) + list(args.yt_playlist):      # เพลย์ลิสต์ของผู้ใช้: ก่อนทุกอย่าง
         try:
-            entries = youtube_playlist_entries(yt, url)
+            entries = youtube_playlist_entries(yt_client(), url)
         except Exception as e:  # noqa: BLE001
             print(f"อ่านเพลย์ลิสต์ไม่ได้ ({str(e)[:80]}): {url}")
             continue
