@@ -278,6 +278,8 @@ def main() -> int:
     ap.add_argument("--queries", default="", help="ไฟล์บรรทัดละ 'ศิลปิน - ชื่อเพลง'")
     ap.add_argument("--from-db", default="", help="สำเนา sqlite ของแอป: ใช้เพลงที่เคยเล่น")
     ap.add_argument("--sleep", type=float, default=8.0)
+    ap.add_argument("--batch", type=int, default=100, help="จำนวนเพลงต่อ 1 รอบ (รอบละ 100 เพลง) — ท้ายรอบจะลองเพลงที่เฟลใหม่ในรอบถัดไป")
+    ap.add_argument("--max-attempts", type=int, default=3, help="ลองเพลงที่เฟลซ้ำสูงสุดกี่ครั้ง")
     ap.add_argument("--no-playlists", action="store_true")
     ap.add_argument("--yt-playlist", action="append", default=[], help="เพลย์ลิสต์ YouTube เพิ่ม (ใส่ซ้ำได้) — ดึงก่อนทุกอย่าง")
     ap.add_argument("--list", action="store_true", help="แค่แสดงรายการเพลงที่จะดึง (ไม่โหลด ไม่ใช้การ์ดจอ)")
@@ -395,31 +397,99 @@ def main() -> int:
 
     target = args.plan or args.limit
     quota = {n: max(1, int(round(args.plan * c["share"]))) for n, c in PLAN.items()} if args.plan else {}
+    state_dir = DATASET_DIR
+    failed_path, skipped_path = state_dir / "harvest_failed.json", state_dir / "harvest_skipped.json"
+    failed: dict[str, dict] = _load_json(failed_path)            # id -> {song, query, category, yt_id, allow_remix, attempts, reason}
+    skipped_ids: set[str] = set(_load_json(skipped_path).keys())    # เพลงที่ไม่มีเนื้อ/สั้นเกินไป: ไม่ต้องตรวจซ้ำทุกรอบ
+    # นับของที่มีอยู่แล้ว (ทำต่อจากรอบก่อนได้ โควตาไม่เกิน)
     got: dict[str, int] = {}
+    for mp in (done_dir.glob("*/meta.json") if done_dir.exists() else []):
+        try:
+            c = json.loads(mp.read_text(encoding="utf-8")).get("category") or "?"
+        except ValueError:
+            continue
+        got[c] = got.get(c, 0) + 1
+    done = sum(v for k, v in got.items() if k != "playlist")
     seen: set[int] = set()
-    done = skipped = 0
     t0 = time.time()
-    for cat, song, yt_id, query, rm in todo:
-        if done >= target:
-            break
-        if song["id"] in seen or exists(song):
-            continue
-        if quota and got.get(cat, 0) >= quota.get(cat, 10**9):
-            continue
-        seen.add(song["id"])
-        lyr, level = netease_lyrics(song)
-        if lyr is None:
-            skipped += 1
-            continue
+    pos = 0
+    rounds = max(1, -(-target // max(1, args.batch))) + 3      # +3: รอบของเพลย์ลิสต์ผู้ใช้ และรอบลองเพลงที่เฟลใหม่
+
+    def attempt(cat: str, song: dict, yt_id: str | None, query: str, rm: bool, lyr, level) -> bool:
+        nonlocal done
         status = process_song(ctx, song, lyr, level or "line", yt_id, query, cat, rm)
-        print(f"[{done + 1}/{target}] ({cat}) {song.get('name')} — {status}  ({(time.time() - t0) / 60:.1f} นาที)", flush=True)
-        if status.startswith(("ผ่าน", "บันทึก")):
-            if cat != "playlist":
-                done += 1          # เพลงในเพลย์ลิสต์ของผู้ใช้ไม่นับเข้าเป้าหมายแผนหมวด
-            got[cat] = got.get(cat, 0) + 1
+        ok = status.startswith(("ผ่าน", "บันทึก", "มีแล้ว"))
+        print(f"  ({cat}) {song.get('name')} — {status}  ({(time.time() - t0) / 60:.1f} นาที)", flush=True)
+        key = str(song["id"])
+        if ok:
+            failed.pop(key, None)
+            if status != "มีแล้ว":
+                got[cat] = got.get(cat, 0) + 1
+                if cat != "playlist":
+                    done += 1      # เพลงในเพลย์ลิสต์ของผู้ใช้ไม่นับเข้าเป้าหมายแผนหมวด
+        else:
+            rec = failed.get(key) or {"song": {"id": song["id"], "name": song.get("name"), "artists": artists_of(song), "dt": song.get("dt") or song.get("duration")},
+                                      "query": query, "category": cat, "yt_id": yt_id, "allow_remix": rm, "attempts": 0}
+            rec["attempts"] += 1
+            rec["reason"] = status
+            failed[key] = rec
+        _save_json(failed_path, failed)
         time.sleep(args.sleep)
-    print(f"เสร็จ: เพิ่ม {done} เพลง, ข้าม (ไม่มีเนื้อ) {skipped} · ตามหมวด: {got}")
+        return ok
+
+    for rnd in range(1, rounds + 1):
+        if done >= target and not any(r["attempts"] < args.max_attempts for r in failed.values()):
+            break
+        ok_round = 0
+        print(f"\n=== รอบ {rnd}/{rounds} (เป้า {args.batch} เพลงต่อรอบ · เสร็จแล้ว {done}/{target} · ค้างรอลองใหม่ {len(failed)}) ===", flush=True)
+        # 1) ลองเพลงที่เฟลรอบก่อนใหม่ก่อน (ไม่เกิน max_attempts ครั้ง)
+        for key, rec in list(failed.items()):
+            if rec["attempts"] >= args.max_attempts or ok_round >= args.batch:
+                continue
+            lyr, level = netease_lyrics(rec["song"])
+            if lyr is None:
+                skipped_ids.add(key)
+                _save_json(skipped_path, {k: 1 for k in skipped_ids})
+                failed.pop(key, None)
+                continue
+            if attempt(rec["category"], rec["song"], rec["yt_id"], rec["query"], bool(rec["allow_remix"]), lyr, level):
+                ok_round += 1
+        # 2) เพลงใหม่ต่อจนครบรอบ
+        while pos < len(todo) and ok_round < args.batch and done < target:
+            cat, song, yt_id, query, rm = todo[pos]
+            pos += 1
+            key = str(song["id"])
+            if song["id"] in seen or exists(song) or key in skipped_ids or key in failed:
+                continue
+            if quota and got.get(cat, 0) >= quota.get(cat, 10**9):
+                continue
+            seen.add(song["id"])
+            lyr, level = netease_lyrics(song)
+            if lyr is None:
+                skipped_ids.add(key)
+                _save_json(skipped_path, {k: 1 for k in skipped_ids})
+                continue
+            if attempt(cat, song, yt_id, query, rm, lyr, level):
+                ok_round += 1
+        print(f"=== จบรอบ {rnd}: ได้ {ok_round} เพลง · ทั้งหมด {done}/{target} · ค้างรอลองใหม่ {len(failed)} (dataset/harvest_failed.json) ===", flush=True)
+        if pos >= len(todo) and ok_round == 0:
+            break
+    print(f"เสร็จ: ได้ {done} เพลง · ตามหมวด: {got} · เฟลค้าง {len(failed)} เพลง (รันซ้ำเพื่อลองใหม่)")
     return 0
+
+
+def _load_json(path: Path) -> dict:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_json(path: Path, obj: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(obj, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(path)
 
 
 if __name__ == "__main__":
