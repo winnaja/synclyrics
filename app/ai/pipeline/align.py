@@ -81,6 +81,8 @@ _kakasi: Any = None
 # uroman ทิ้งสระอะที่ภาษาไทยไม่เขียน (ขนม -> khnm ไม่มีสระเลย) · royin ของ pythainlp เติมให้ (khanom)
 # แต่ royin ก็พลาดบางคำ (หัวใจ -> uachai หาย h) จึงต้องวัดก่อนว่าตัวไหนดีกว่าจริง: ตั้งค่าได้ด้วย SYNCLYRICS_TH_ROMAN
 _TH_ROMAN = __import__("os").environ.get("SYNCLYRICS_TH_ROMAN", "uroman")
+# วิธีหาเวลาจบของคำท้ายบรรทัด: continue = ต่อถึงบรรทัดถัดไป · hold = ต่อจาก CTC อีก HOLD_TAIL_S (ของเดิม)
+_LINE_END = __import__("os").environ.get("SYNCLYRICS_LINE_END", "continue")
 
 
 def _thai_reading(word: str) -> str | None:
@@ -381,37 +383,7 @@ def align_global(bundle: dict[str, Any], vocals16: np.ndarray, line_words: list[
 
 
 HOLD_TAIL_S = 0.14      # ลากต่อขั้นต่ำเมื่อดูพลังเสียงไม่ได้ (ค่าที่วัดได้ว่า CTC ตัดจบคำเร็วไปโดยเฉลี่ย)
-HOLD_MAX_S = 3.0        # เพดานการลากโน้ตค้างของคำท้ายบรรทัด
-HOLD_FLOOR = 0.18       # เบากว่านี้เทียบกับพลังเสียงของคำเอง = เลิกร้องแล้ว (ที่เหลือเป็นเสียงสะท้อน/ดนตรี)
-HOP = 320               # 20 มิลลิวินาทีที่ 16 kHz
-
-
-def _tail_end(vocals16: np.ndarray, w_start: float, ctc_end: float, limit: float) -> float:
-    """คำท้ายบรรทัดจบจริงเมื่อไหร่ — เดินตามพลังเสียงร้องไปจนกว่าจะเบาลง (ลากโน้ตค้าง)
-
-    เฉลยมนุษย์: คำท้ายบรรทัดยาวมัธยฐาน 0.66 วิ (คำกลางบรรทัด 0.29) แต่ช่องว่างถึงบรรทัดถัดไปแค่ 0.12 วิ
-    ต่อให้ตายตัวจึงตัดโน้ตค้างทิ้ง · ใช้พลังเสียงจึงแยก "ยังร้องค้างอยู่" ออกจาก "เงียบแล้ว/เสียงสะท้อน" ได้
-    """
-    hi = min(len(vocals16) / SAMPLE_RATE, min(limit, ctc_end + HOLD_MAX_S))
-    if hi <= ctc_end + 0.04:
-        return ctc_end
-    a = max(0, int(w_start * SAMPLE_RATE))
-    b = min(len(vocals16), int(hi * SAMPLE_RATE))
-    seg = vocals16[a:b]
-    n = len(seg) // HOP
-    if n < 3:
-        return ctc_end
-    rms = np.sqrt((seg[:n * HOP].reshape(n, HOP).astype(np.float32) ** 2).mean(axis=1))
-    k0 = max(1, int((ctc_end - w_start) * SAMPLE_RATE) // HOP)        # เฟรมที่ CTC บอกว่าจบ
-    ref = float(rms[:k0].max()) if k0 > 0 else float(rms.max())
-    if ref <= 1e-6:
-        return ctc_end
-    quiet = 0
-    for k in range(k0, n):
-        quiet = quiet + 1 if rms[k] < HOLD_FLOOR * ref else 0
-        if quiet >= 3:        # เบาติดกัน 60 มิลลิวินาที = จบจริง
-            return max(ctc_end, w_start + (k - 2) * HOP / SAMPLE_RATE)
-    return max(ctc_end, hi)
+HOLD_MAX_S = 2.0        # เพดานความยาวคำท้ายบรรทัด (วัดแล้ว 2 วิ ให้ผลเกือบเท่าไม่จำกัด แต่กันช่วงดนตรียาว)
 
 
 def _hold_notes(raw: list[list[tuple[list[Any], float, float] | None]], vocals16: np.ndarray | None = None) -> None:
@@ -426,11 +398,14 @@ def _hold_notes(raw: list[list[tuple[list[Any], float, float] | None]], vocals16
         if n + 1 < len(flat):
             nli, nwi = flat[n + 1]
             nxt = raw[nli][nwi][1]      # type: ignore[index]
-            if nli == li:               # ในบรรทัดเดียวกัน: ต่อเนื่องถึงคำถัดไป (เฉลยมนุษย์ 99% เป็นแบบนี้)
+            # ต่อเนื่องถึงคำถัดไปทั้งในบรรทัดและข้ามบรรทัด — วัดกับเฉลยมนุษย์ 2,770 คำท้ายบรรทัดแล้วกติกานี้ตรงที่สุด
+            # (≤50ms 40% เทียบวิธีรอให้พลังเสียงเบาลงซึ่งได้ 21%) · คำท้ายบรรทัดจำกัดไว้ HOLD_MAX_S กันช่วงดนตรียาว
+            if nli == li:
                 ge = max(gs + 0.04, nxt)
-            else:                       # คำท้ายบรรทัด: ฟังว่าลากโน้ตค้างถึงไหน ห้ามชนบรรทัดถัดไป
-                ge = _tail_end(vocals16, gs, ge, nxt) if vocals16 is not None else min(ge + HOLD_TAIL_S, nxt)
-                ge = max(gs + 0.04, min(ge, nxt))
+            elif _LINE_END == "hold":      # แบบเดิม: ต่อจากที่ CTC บอกอีกนิดเดียว
+                ge = max(gs + 0.04, min(ge + HOLD_TAIL_S, nxt))
+            else:
+                ge = max(gs + 0.04, min(nxt, gs + HOLD_MAX_S))
         else:
-            ge = _tail_end(vocals16, gs, ge, 1e9) if vocals16 is not None else ge + HOLD_TAIL_S
+            ge = ge + HOLD_TAIL_S
         raw[li][wi] = (grp, gs, ge)
