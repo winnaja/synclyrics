@@ -85,8 +85,8 @@ def load_aligner(model_path: str | None):
     paths = get_paths()
     cfg, _ = load_model(paths, "models.yaml", ModelsConfig)
     md = cfg.model_dump()
-    if model_path:
-        md.setdefault("align", {})["finetuned"] = model_path
+    # ตั้งค่าเสมอ: ค่าเริ่มต้นใน models.yaml ชี้ไปที่น้ำหนัก fine-tune อยู่แล้ว ถ้าไม่เคลียร์ "MMS เดิม" จะกลายเป็นตัว fine-tune
+    md.setdefault("align", {})["finetuned"] = model_path or ""
     setup_ai_environment(md)
     import torch  # noqa: F401
 
