@@ -80,6 +80,7 @@ def main() -> int:
     ap.add_argument("--vram-frac", type=float, default=0.88, help="เพดาน VRAM ที่ PyTorch ใช้ได้ (ส่วนที่เหลือไว้ให้ Windows) — เกินแล้ว Windows ล้นไปใช้แรมเครื่อง ช้าลง 10 เท่า")
     ap.add_argument("--val-every", type=int, default=800)
     ap.add_argument("--init", default="", help="เริ่มต่อจากไฟล์น้ำหนักที่เทรนไว้ (เช่น mms_singing.pt) แทนที่จะเริ่มจาก MMS เดิม")
+    ap.add_argument("--val-list", default=str(ROOT / "dataset" / "val_songs.txt"), help="ไฟล์รายชื่อเพลงวัดผลที่ตรึงไว้ (สร้างอัตโนมัติครั้งแรก) — ลบไฟล์นี้เพื่อสุ่มชุดใหม่")
     ap.add_argument("--val-songs", type=int, default=100, help="จำนวนเพลง val ที่ใช้วัด (เรียงเพลงเฉลยรายคำก่อน) · 0 = ทั้งหมด")
     ap.add_argument("--max-songs", type=int, default=0)
     ap.add_argument("--out", default=str(ROOT / "ai_runtime" / "models" / "mms_singing.pt"))
@@ -114,7 +115,18 @@ def main() -> int:
     # เพลงเฉลยรายคำมาก่อน: คะแนนเลือกน้ำหนักใช้ตัวเลขรายคำ และ val โตขึ้นเรื่อยๆ จนต้องจำกัดจำนวน (วัดครั้งละ ~1.5 วิ/เพลง)
     val_songs = sorted(iter_songs("val"), key=lambda s: s.meta.get("ref_timing", "word") != "word")
     if args.val_songs:
-        val_songs = val_songs[:args.val_songs]
+        # ตรึงรายชื่อเพลงวัดผลไว้ในไฟล์: เก็บเพลงเพิ่มทุกรอบทำให้ชุดวัดเปลี่ยนไปเรื่อยๆ ตัวเลขข้ามรอบจึงเทียบกันไม่ได้
+        pin = Path(args.val_list)
+        if pin.exists():
+            want = [x for x in pin.read_text(encoding="utf-8").split() if x]
+            have = {s.id: s for s in val_songs}
+            val_songs = [have[i] for i in want if i in have]
+            print(f"ใช้ชุดวัดผลที่ตรึงไว้ {len(val_songs)}/{len(want)} เพลง ({pin})", flush=True)
+        else:
+            val_songs = val_songs[:args.val_songs]
+            pin.parent.mkdir(parents=True, exist_ok=True)
+            pin.write_text("\n".join(s.id for s in val_songs), encoding="utf-8")
+            print(f"ตรึงชุดวัดผล {len(val_songs)} เพลงไว้ที่ {pin}", flush=True)
     if args.max_songs:
         train_songs = train_songs[:args.max_songs]
     if not val_songs and train_songs:
