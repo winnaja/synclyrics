@@ -115,7 +115,7 @@ def word_loss(lpb, olens, words, dev):
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--word-loss", type=float, default=1.0, help="น้ำหนักของการสอนเวลาทีละคำ (0 = ปิด ใช้ CTC ทั้งคลิปอย่างเดียวแบบเดิม)")
+    ap.add_argument("--word-loss", type=float, default=0.0, help="น้ำหนักของการสอนเวลาทีละคำ (0 = ปิด ใช้ CTC ทั้งคลิปอย่างเดียวแบบเดิม)")
     ap.add_argument("--epochs", type=int, default=3)
     ap.add_argument("--batch", type=int, default=4)
     ap.add_argument("--lr", type=float, default=2e-5)
