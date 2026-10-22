@@ -25,7 +25,33 @@ sys.path.insert(0, str(ROOT))
 PY = str(ROOT / ".venv" / "Scripts" / "python.exe")
 STOP = ROOT / "dataset" / "STOP"
 STATE = ROOT / "dataset" / "train_forever.jsonl"
+KIDS = ROOT / "dataset" / ".children.json"       # pid ของโปรเซสลูก เอาไว้เก็บกวาดถ้ารอบก่อนถูกฆ่าแบบไม่ทันลา
 BEST = ROOT / "ai_runtime" / "models" / "mms_singing.pt"
+
+
+def kill_strays() -> None:
+    """ฆ่าโปรเซสลูกที่ค้างจากรอบก่อน — ปิดลูปด้วย Stop-Process ลูกไม่ตายตาม แล้วจะมาแย่งการ์ดจอ/แรม
+    (เคยเจอ: ตัวเทรนค้างทำให้เทรนช้าลง 20 เท่าและดิสก์หายไป 10 GB)"""
+    for pid in _load(KIDS) or []:
+        try:
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)], capture_output=True, timeout=20)
+        except Exception:  # noqa: BLE001
+            pass
+    _save(KIDS, [])
+
+
+def _load(path: Path):
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def _save(path: Path, obj) -> None:
+    try:
+        path.write_text(json.dumps(obj), encoding="utf-8")
+    except OSError:
+        pass
 
 
 def log(msg: str) -> None:
@@ -57,15 +83,18 @@ def run(args: list[str], logfile: Path, timeout_s: float) -> int:
     with logfile.open("a", encoding="utf-8") as f:
         f.write(f"\n===== {time.strftime('%Y-%m-%d %H:%M:%S')} {' '.join(args[1:])} =====\n")
         f.flush()
-        p = subprocess.Popen(args, cwd=str(ROOT), stdout=f, stderr=subprocess.STDOUT,
+        p = subprocess.Popen(args, cwd=str(ROOT), stdout=f, stderr=subprocess.STDOUT,  # noqa: S603
                              env={**os.environ, "PYTHONIOENCODING": "utf-8",
                                   "PYTORCH_CUDA_ALLOC_CONF": "garbage_collection_threshold:0.7,max_split_size_mb:256"})
+        _save(KIDS, [p.pid])
         try:
             return p.wait(timeout=timeout_s)
         except subprocess.TimeoutExpired:
-            p.kill()
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(p.pid)], capture_output=True, timeout=20)
             p.wait()
             return 124
+        finally:
+            _save(KIDS, [])
 
 
 def last_val(logfile: Path) -> dict:
@@ -99,6 +128,7 @@ def main() -> int:
     args = ap.parse_args()
 
     STOP.unlink(missing_ok=True)
+    kill_strays()
     hlog, tlog = ROOT / "dataset" / "forever_harvest.log", ROOT / "dataset" / "forever_train.log"
     log(f"เริ่มวนเทรน · หยุดด้วยการสร้างไฟล์ {STOP}")
     log(f"เพลงตอนนี้: {counts()} · ดิสก์ว่าง {free_gb():.0f} GB")
