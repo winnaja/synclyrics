@@ -54,6 +54,20 @@ def _save(path: Path, obj) -> None:
         pass
 
 
+def improved(logfile: Path) -> bool:
+    """รอบล่าสุดได้น้ำหนักที่ดีกว่าเดิมไหม — train_ctc พิมพ์ ★ ทุกครั้งที่บันทึกทับ"""
+    try:
+        text = logfile.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    return "★" in text.rsplit("=====", 1)[-1]
+
+
+def _write(rec: dict) -> None:
+    with STATE.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(rec, ensure_ascii=False) + chr(10))
+
+
 def log(msg: str) -> None:
     print(f"[{time.strftime('%m-%d %H:%M:%S')}] {msg}", flush=True)
 
@@ -138,48 +152,56 @@ def main() -> int:
         rnd += 1
         rec: dict = {"round": rnd, "at": time.strftime("%Y-%m-%d %H:%M:%S")}
 
-        # 1) โหลดเพลงที่เฉลยเป็นเวลารายคำเพิ่ม (เฉลยรายคำ = สอนและวัด "ทีละคำ" ได้จริง)
-        before = counts()
-        if not harvest_dead and free_gb() > args.min_free_gb:
-            log(f"รอบ {rnd}: โหลดเพลงอีก {args.songs_per_round} เพลง ...")
-            # สลับรอบ: รอบคี่เก็บภาษาที่ข้อมูลน้อย (ไทย/เกาหลี ไม่บังคับเฉลยรายคำ เพราะหายาก) · รอบคู่เก็บเฉลยรายคำทั่วไป
-            focus = rnd % 2 == 1 and args.weak_cats
-            cmd = [PY, "-u", "scripts/harvest.py", "--plan", str(args.pool),
-                   "--max-new", str(args.songs_per_round), "--batch", str(args.songs_per_round),
-                   "--cookies-dir", "dataset/_cookies", "--workers", str(args.workers), "--sleep", str(args.sleep)]
-            cmd += ["--cats", args.weak_cats] if focus else ["--word-only"]
-            log(f"รอบ {rnd}: {'เน้นภาษาที่ข้อมูลน้อย (' + args.weak_cats + ')' if focus else 'เฉลยรายคำทั่วไป'}")
-            rc = run(cmd, hlog, timeout_s=4 * 3600)
-            after = counts()
-            got = after["word_train"] + after["word_val"] - before["word_train"] - before["word_val"]
-            rec.update({"harvest_rc": rc, "new_word_songs": got})
-            log(f"รอบ {rnd}: ได้เพลงรายคำเพิ่ม {got} เพลง (rc={rc}) · รวม {after['word_train'] + after['word_val']}")
-            if got == 0 and rc == 0 and not focus:
-                harvest_dead = True       # กองเพลงหมด: รอบต่อไปข้ามการโหลด
-                log("ไม่มีเพลงเฉลยรายคำใหม่ให้โหลดแล้ว — จากนี้เทรนอย่างเดียว")
-        else:
-            rec["harvest_skipped"] = "ดิสก์เหลือน้อย" if free_gb() <= args.min_free_gb else "กองเพลงหมด"
-        if stopped():
-            break
-
-        # 2) เทรนต่อจากน้ำหนักที่ดีที่สุด (บันทึกทับเมื่อคะแนนรายคำดีขึ้นเท่านั้น)
+        # 1) เทรนก่อนเสมอ — ต่อจากน้ำหนักที่ดีที่สุด (บันทึกทับเมื่อคะแนนรายคำดีขึ้นเท่านั้น)
         log(f"รอบ {rnd}: เทรน {args.steps_per_round} ก้าว ...")
         cmd = [PY, "-u", "scripts/train_ctc.py", "--epochs", "99", "--max-steps", str(args.steps_per_round)]
         if BEST.exists():
             cmd += ["--init", str(BEST)]
         rc = run(cmd, tlog, timeout_s=6 * 3600)
         v = last_val(tlog)
-        rec.update({"train_rc": rc, "val": v, "songs": counts(), "free_gb": round(free_gb(), 1)})
-        with STATE.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        gained = improved(tlog)
+        rec.update({"train_rc": rc, "val": v, "improved": gained})
         if v:
             log(f"รอบ {rnd} จบ: เริ่มคำ ≤0.15 วิ {v.get('word_le015', 0):.1%} · จบคำ ≤0.15 วิ {v.get('end_le015', 0):.1%} "
-                f"· เริ่มบรรทัด ≤0.3 วิ {v.get('le03', 0):.1%} (rc={rc})")
+                f"· เริ่มบรรทัด ≤0.3 วิ {v.get('le03', 0):.1%} · {'ดีขึ้น' if gained else 'ไม่ดีขึ้น'} (rc={rc})")
         else:
             log(f"รอบ {rnd} จบ: ไม่มีผลวัด (rc={rc}) — ดู {tlog}")
         if rc not in (0, 124):
             log("เทรนจบด้วยข้อผิดพลาด — พัก 60 วิแล้วลองรอบถัดไป")
             time.sleep(60)
+        if stopped():
+            _write(rec)
+            break
+
+        # 2) โหลดเพลงเพิ่ม "เฉพาะเมื่อเทรนแล้วไม่ดีขึ้น" = ข้อมูลที่มีถูกใช้จนหมดประโยชน์แล้ว จึงค่อยเติมของใหม่
+        if gained:
+            rec["harvest_skipped"] = "ยังดีขึ้นอยู่ ใช้ข้อมูลเดิมต่อ"
+        elif harvest_dead:
+            rec["harvest_skipped"] = "กองเพลงหมด"
+        elif free_gb() <= args.min_free_gb:
+            rec["harvest_skipped"] = f"ดิสก์เหลือ {free_gb():.0f} GB"
+            log(f"รอบ {rnd}: ดิสก์เหลือน้อย ({free_gb():.0f} GB) — ไม่โหลดเพลงเพิ่ม เทรนต่ออย่างเดียว")
+        else:
+            before = counts()
+            # สลับ: ครั้งนี้เก็บภาษาที่ข้อมูลน้อย (ไทย/เกาหลี ไม่บังคับเฉลยรายคำ เพราะหายาก) ครั้งหน้าเก็บเฉลยรายคำทั่วไป
+            focus = bool(args.weak_cats) and (rec.get("round", 0) % 2 == 1)
+            log(f"รอบ {rnd}: เทรนไม่ดีขึ้นแล้ว -> โหลดเพลงเพิ่ม {args.songs_per_round} เพลง "
+                f"({'เน้น ' + args.weak_cats if focus else 'เฉลยรายคำทั่วไป'}) ...")
+            hcmd = [PY, "-u", "scripts/harvest.py", "--plan", str(args.pool),
+                    "--max-new", str(args.songs_per_round), "--batch", str(args.songs_per_round),
+                    "--cookies-dir", "dataset/_cookies", "--workers", str(args.workers), "--sleep", str(args.sleep)]
+            hcmd += ["--cats", args.weak_cats] if focus else ["--word-only"]
+            hrc = run(hcmd, hlog, timeout_s=4 * 3600)
+            after = counts()
+            got = after["word_train"] + after["word_val"] - before["word_train"] - before["word_val"]
+            rec.update({"harvest_rc": hrc, "new_word_songs": got})
+            log(f"รอบ {rnd}: ได้เพลงรายคำเพิ่ม {got} เพลง (rc={hrc}) · รวม {after['word_train'] + after['word_val']}")
+            if got == 0 and hrc == 0 and not focus:
+                harvest_dead = True
+                log("ไม่มีเพลงเฉลยรายคำใหม่ให้โหลดแล้ว — จากนี้เทรนอย่างเดียว")
+        rec["songs"] = counts()
+        rec["free_gb"] = round(free_gb(), 1)
+        _write(rec)
     log(f"หยุดแล้วที่รอบ {rnd} ({'สั่งหยุด' if stopped() else 'ครบจำนวนรอบ'})")
     STOP.unlink(missing_ok=True)
     return 0
