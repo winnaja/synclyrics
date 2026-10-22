@@ -39,6 +39,8 @@ def main() -> int:
     ap.add_argument("--model", default=str(ROOT / "ai_runtime" / "models" / "mms_singing.pt"))
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--raw-audio", action="store_true")
+    ap.add_argument("--lang", default="", help="วัดเฉพาะภาษานี้ (th/en/zh/ja/ko)")
+    ap.add_argument("--all-songs", action="store_true", help="ใช้ทุกเพลงที่มีเฉลยรายคำ ไม่ใช่แค่ชุด val (ใช้ทดสอบการแปลงตัวอักษร ซึ่งไม่ได้เรียนจากข้อมูล)")
     args = ap.parse_args()
 
     import numpy as np
@@ -52,7 +54,11 @@ def main() -> int:
         want = [x for x in PIN.read_text(encoding="utf-8").split() if x]
         have = {s.id: s for s in songs}
         songs = [have[i] for i in want if i in have]
+    if args.all_songs:
+        songs = list(iter_songs(None))
     songs = [s for s in songs if s.meta.get("ref_timing") == "word"]
+    if args.lang:
+        songs = [s for s in songs if (s.meta.get("language") or "")[:2] == args.lang]
     if args.limit:
         songs = songs[:args.limit]
     mms = load_aligner(args.model or None)

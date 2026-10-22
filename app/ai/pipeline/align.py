@@ -78,6 +78,18 @@ def clean_latin(text: str) -> str:
 
 
 _kakasi: Any = None
+# uroman ทิ้งสระอะที่ภาษาไทยไม่เขียน (ขนม -> khnm ไม่มีสระเลย) · royin ของ pythainlp เติมให้ (khanom)
+# แต่ royin ก็พลาดบางคำ (หัวใจ -> uachai หาย h) จึงต้องวัดก่อนว่าตัวไหนดีกว่าจริง: ตั้งค่าได้ด้วย SYNCLYRICS_TH_ROMAN
+_TH_ROMAN = __import__("os").environ.get("SYNCLYRICS_TH_ROMAN", "uroman")
+
+
+def _thai_reading(word: str) -> str | None:
+    try:
+        from pythainlp.transliterate import romanize
+
+        return romanize(word, engine="royin") or None
+    except Exception:  # noqa: BLE001 — pythainlp มีปัญหา = ใช้ uroman ต่อ
+        return None
 
 
 def _japanese_reading(word: str) -> str | None:
@@ -155,6 +167,10 @@ def romanize_word(word: str, language: str | None, uroman: Any) -> str:
         jp = _japanese_reading(word)
         if jp:
             return clean_latin(jp)
+    if language == "th" and _TH_ROMAN == "royin":
+        th = _thai_reading(word)
+        if th:
+            return clean_latin(th)
     if uroman is not None and (language in _UROMAN_LANG or _needs_uroman(word)):
         try:
             text = uroman.romanize_string(word, lcode=_UROMAN_LANG.get(language or "", None))
