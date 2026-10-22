@@ -253,12 +253,15 @@ def process_song(ctx: dict, song: dict, lyr, level: str, fetched, category: str 
     return "ผ่าน" if not suspect else "บันทึกแล้วแต่ติดธง suspect (เฉลยไม่เข้ากับเสียง)"
 
 
-def build_plan(total: int) -> list[tuple[str, dict, bool]]:
-    """-> [(หมวด, เพลง NetEase, allow_remix)] สลับหมวดตามสัดส่วนทุกช่วง (หยุดตรงไหนก็สมดุล) · เพลงซ้ำข้ามหมวดไม่นับซ้ำ"""
+def build_plan(total: int, only: set[str] | None = None) -> list[tuple[str, dict, bool]]:
+    """-> [(หมวด, เพลง NetEase, allow_remix)] สลับหมวดตามสัดส่วนทุกช่วง (หยุดตรงไหนก็สมดุล) · เพลงซ้ำข้ามหมวดไม่นับซ้ำ
+    only = เอาเฉพาะหมวดเหล่านี้ (ใช้เก็บภาษาที่ข้อมูลยังน้อย)"""
     import itertools
 
     cats: dict[str, list[dict]] = {}
     for name, cfg in PLAN.items():
+        if only and name not in only:
+            continue
         pids = list(cfg["playlists"])
         for kw in cfg.get("keywords", []):
             pids += search_playlists(kw, cfg.get("top", 2))
@@ -307,6 +310,7 @@ def main() -> int:
     ap.add_argument("--batch", type=int, default=100, help="จำนวนเพลงต่อ 1 รอบ (รอบละ 100 เพลง) — ท้ายรอบจะลองเพลงที่เฟลใหม่ในรอบถัดไป")
     ap.add_argument("--max-attempts", type=int, default=3, help="ลองเพลงที่เฟลซ้ำสูงสุดกี่ครั้ง")
     ap.add_argument("--cookies-dir", default="", help="โฟลเดอร์ไฟล์ cookies.txt (หลายบัญชี) ที่จะหมุนใช้สลับกันทีละเพลง · ไม่ใส่ = ใช้ cookies ของแอป")
+    ap.add_argument("--cats", default="", help="เก็บเฉพาะหมวดนี้ (คั่นด้วยจุลภาค เช่น thai,korean) — ใช้เติมภาษาที่ข้อมูลน้อย")
     ap.add_argument("--word-only", action="store_true", help="เก็บเฉพาะเพลงที่เฉลยเป็นเวลารายคำจริง (ใช้เพิ่มชุดวัดผล/สอนให้แม่นขึ้น)")
     ap.add_argument("--max-new", type=int, default=0, help="หยุดเมื่อได้เพลงใหม่ครบเท่านี้ (นับต่อจากที่มีอยู่) แทนเป้าทั้งหมดของ --plan")
     ap.add_argument("--no-playlists", action="store_true")
@@ -323,7 +327,7 @@ def main() -> int:
 
     plan_items: list[tuple[str, dict, bool]] = []
     if args.plan:
-        plan_items = build_plan(args.plan)
+        plan_items = build_plan(args.plan, set(args.cats.split(",")) if args.cats else None)
     if args.list:
         from app.audio.decoder import find_ffmpeg as _ff
         from app.core.paths import get_paths as _gp
@@ -443,7 +447,10 @@ def main() -> int:
                 todo.append((name, song, None, f"{arts[0]['name'] if arts else ''} {song.get('name')} audio", False))
 
     target = args.plan or args.limit
-    quota = {n: max(1, int(round(args.plan * c["share"]))) for n, c in PLAN.items()} if args.plan else {}
+    sel = set(args.cats.split(",")) if args.cats else None
+    pl = {n: c for n, c in PLAN.items() if not sel or n in sel}
+    tot_share = sum(c["share"] for c in pl.values()) or 1.0
+    quota = {n: max(1, int(round(args.plan * c["share"] / tot_share))) for n, c in pl.items()} if args.plan else {}
     state_dir = DATASET_DIR
     failed_path, skipped_path = state_dir / "harvest_failed.json", state_dir / "harvest_skipped.json"
     failed: dict[str, dict] = _load_json(failed_path)            # id -> {song, query, category, yt_id, allow_remix, attempts, reason}

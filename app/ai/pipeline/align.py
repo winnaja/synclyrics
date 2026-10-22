@@ -77,10 +77,84 @@ def clean_latin(text: str) -> str:
     return _LATIN_RE.sub("", text.lower())
 
 
+_kakasi: Any = None
+
+
+def _japanese_reading(word: str) -> str | None:
+    """คันจิ -> คำอ่านญี่ปุ่นเป็นอักษรละติน · uroman อ่านคันจิเป็นเสียงจีนเสมอ (東京 -> dongjing ไม่ใช่ toukyou)
+    แม้ส่ง lcode=jpn ไปแล้ว ทำให้เพลงญี่ปุ่นถูกจับคู่กับเสียงที่ออกเสียงผิดทั้งเพลง
+    หมายเหตุ: pykakasi เลือกคำอ่านจากพจนานุกรม ไม่ได้วิเคราะห์ไวยากรณ์ คันจิที่มีหลายคำอ่านจึงยังพลาดได้บ้าง"""
+    global _kakasi
+    if _kakasi is None:
+        try:
+            import pykakasi
+
+            _kakasi = pykakasi.kakasi()
+        except Exception:  # noqa: BLE001 — ไม่มี pykakasi = ใช้ uroman ต่อ (ญี่ปุ่นจะแม่นน้อยลง)
+            _kakasi = False
+    if not _kakasi:
+        return None
+    try:
+        return "".join(part["hepburn"] for part in _kakasi.convert(word))
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def romanize_line(words: list[str], language: str | None, uroman: Any) -> list[str]:
+    """คำทั้งบรรทัด -> คำอ่านละตินของแต่ละคำ
+
+    ญี่ปุ่นต้องอ่านทั้งบรรทัดพร้อมกัน: เฉลยจาก NetEase แยกเป็นตัวอักษรทีละตัว แต่คำอ่านคันจิขึ้นกับคำประสมทั้งคำ
+    (世界 = sekai แต่แยกเป็น 世 + 界 ทีละตัวจะได้คำอ่านอื่น) · ภาษาอื่นแปลงทีละคำเหมือนเดิม
+    """
+    if language == "ja" and any(_needs_uroman(w) for w in words):
+        out = _japanese_line_reading(words)
+        if out is not None:
+            return out
+    return [romanize_word(w, language, uroman) for w in words]
+
+
+def _japanese_line_reading(words: list[str]) -> list[str] | None:
+    """อ่านทั้งบรรทัดแล้วกระจายคำอ่านกลับไปแต่ละคำ · คำอ่านที่คร่อมหลายคำแบ่งตามสัดส่วนจำนวนตัวอักษร"""
+    if _japanese_reading("あ") is None:      # ไม่มี pykakasi
+        return None
+    owner: list[int] = []
+    for wi, w in enumerate(words):
+        owner.extend([wi] * len(w))
+    try:
+        segs = _kakasi.convert("".join(words))
+    except Exception:  # noqa: BLE001
+        return None
+    out = [""] * len(words)
+    pos = 0
+    for seg in segs:
+        src, read = seg.get("orig") or "", seg.get("hepburn") or ""
+        if not src:
+            continue
+        span = owner[pos:pos + len(src)]
+        pos += len(src)
+        if not span:
+            continue
+        uniq = sorted(set(span))
+        if len(uniq) == 1:
+            out[uniq[0]] += read
+        else:       # คำอ่านเดียวคร่อมหลายคำ -> ตัดตามสัดส่วนจำนวนตัวอักษรต้นฉบับของแต่ละคำ
+            k = 0
+            for wi in uniq:
+                n = span.count(wi)
+                take = max(1, round(len(read) * n / len(span))) if wi != uniq[-1] else len(read) - k
+                out[wi] += read[k:k + max(0, take)]
+                k += max(0, take)
+    return [clean_latin(r) for r in out]
+
+
 def romanize_word(word: str, language: str | None, uroman: Any) -> str:
     """คำ -> ตัวอักษรละติน (a-z ') ที่ใช้ align ได้ · แปลงไม่ได้/ไม่มีตัวอักษรเลย = "" """
     if not word.strip():
         return ""
+    if language == "ja":
+        jp = _japanese_reading(word)
+        if jp:
+            return clean_latin(jp)
     if uroman is not None and (language in _UROMAN_LANG or _needs_uroman(word)):
         try:
             text = uroman.romanize_string(word, lcode=_UROMAN_LANG.get(language or "", None))
@@ -101,7 +175,7 @@ def align_line(bundle: dict[str, Any], vocals16: np.ndarray, line_start: float, 
     import torch
     import torchaudio.functional as F
 
-    roman = [romanize_word(w, language, bundle["uroman"]) for w in words]
+    roman = romanize_line(words, language, bundle["uroman"])
     if sum(len(r) for r in roman) < 2:
         return None
     t0 = max(0.0, line_start - EDGE_S)
@@ -250,8 +324,8 @@ def align_global(bundle: dict[str, Any], vocals16: np.ndarray, line_words: list[
     words_tok: list[list[list[int]]] = []
     for li, ws in enumerate(line_words):
         wl = []
-        for wi, w in enumerate(ws):
-            ids = [d[c] for c in romanize_word(w, language, bundle["uroman"]) if c in d]
+        for wi, rom in enumerate(romanize_line(ws, language, bundle["uroman"])):
+            ids = [d[c] for c in rom if c in d]
             wl.append(ids)
             tokens.extend(ids)
             owner.extend([(li, wi)] * len(ids))
@@ -280,7 +354,7 @@ def align_global(bundle: dict[str, Any], vocals16: np.ndarray, line_words: list[
             k += len(ids)
             line.append((grp, grp[0].start * sec, max(grp[-1].end * sec, grp[0].start * sec + 0.04)))
         raw.append(line)
-    _hold_notes(raw)
+    _hold_notes(raw, vocals16)
     for li, line in enumerate(raw):
         res: list[tuple[float, float, float] | None] = [
             None if w is None else Span(w[1], w[2], float(sum(sp.score for sp in w[0]) / len(w[0])), _curve(w[0], 0.0, sec, w[1], w[2]))
@@ -290,10 +364,41 @@ def align_global(bundle: dict[str, Any], vocals16: np.ndarray, line_words: list[
     return out
 
 
-HOLD_TAIL_S = 0.14      # คำสุดท้ายของบรรทัดลากต่อได้เท่านี้ (ค่าที่วัดได้ว่า CTC ตัดจบคำเร็วไปโดยเฉลี่ย)
+HOLD_TAIL_S = 0.14      # ลากต่อขั้นต่ำเมื่อดูพลังเสียงไม่ได้ (ค่าที่วัดได้ว่า CTC ตัดจบคำเร็วไปโดยเฉลี่ย)
+HOLD_MAX_S = 3.0        # เพดานการลากโน้ตค้างของคำท้ายบรรทัด
+HOLD_FLOOR = 0.18       # เบากว่านี้เทียบกับพลังเสียงของคำเอง = เลิกร้องแล้ว (ที่เหลือเป็นเสียงสะท้อน/ดนตรี)
+HOP = 320               # 20 มิลลิวินาทีที่ 16 kHz
 
 
-def _hold_notes(raw: list[list[tuple[list[Any], float, float] | None]]) -> None:
+def _tail_end(vocals16: np.ndarray, w_start: float, ctc_end: float, limit: float) -> float:
+    """คำท้ายบรรทัดจบจริงเมื่อไหร่ — เดินตามพลังเสียงร้องไปจนกว่าจะเบาลง (ลากโน้ตค้าง)
+
+    เฉลยมนุษย์: คำท้ายบรรทัดยาวมัธยฐาน 0.66 วิ (คำกลางบรรทัด 0.29) แต่ช่องว่างถึงบรรทัดถัดไปแค่ 0.12 วิ
+    ต่อให้ตายตัวจึงตัดโน้ตค้างทิ้ง · ใช้พลังเสียงจึงแยก "ยังร้องค้างอยู่" ออกจาก "เงียบแล้ว/เสียงสะท้อน" ได้
+    """
+    hi = min(len(vocals16) / SAMPLE_RATE, min(limit, ctc_end + HOLD_MAX_S))
+    if hi <= ctc_end + 0.04:
+        return ctc_end
+    a = max(0, int(w_start * SAMPLE_RATE))
+    b = min(len(vocals16), int(hi * SAMPLE_RATE))
+    seg = vocals16[a:b]
+    n = len(seg) // HOP
+    if n < 3:
+        return ctc_end
+    rms = np.sqrt((seg[:n * HOP].reshape(n, HOP).astype(np.float32) ** 2).mean(axis=1))
+    k0 = max(1, int((ctc_end - w_start) * SAMPLE_RATE) // HOP)        # เฟรมที่ CTC บอกว่าจบ
+    ref = float(rms[:k0].max()) if k0 > 0 else float(rms.max())
+    if ref <= 1e-6:
+        return ctc_end
+    quiet = 0
+    for k in range(k0, n):
+        quiet = quiet + 1 if rms[k] < HOLD_FLOOR * ref else 0
+        if quiet >= 3:        # เบาติดกัน 60 มิลลิวินาที = จบจริง
+            return max(ctc_end, w_start + (k - 2) * HOP / SAMPLE_RATE)
+    return max(ctc_end, hi)
+
+
+def _hold_notes(raw: list[list[tuple[list[Any], float, float] | None]], vocals16: np.ndarray | None = None) -> None:
     """ยืด "เวลาจบคำ" ให้ต่อเนื่องถึงคำถัดไป (แก้ในที่)
 
     CTC พุ่งขึ้นตอนเจอตัวอักษรแล้วดับทันที จบคำจึงเร็วกว่าที่ร้องจริงราว 0.14 วิ ขณะที่คำหนึ่งยาวเฉลี่ย 0.30 วิ
@@ -305,8 +410,11 @@ def _hold_notes(raw: list[list[tuple[list[Any], float, float] | None]]) -> None:
         if n + 1 < len(flat):
             nli, nwi = flat[n + 1]
             nxt = raw[nli][nwi][1]      # type: ignore[index]
-            # ในบรรทัดเดียวกัน = ต่อเนื่องถึงคำถัดไป · ข้ามบรรทัด = ลากได้แต่ห้ามชนบรรทัดถัดไป (มีช่วงพักจริง)
-            ge = max(gs + 0.04, nxt if nli == li else min(ge + HOLD_TAIL_S, nxt))
+            if nli == li:               # ในบรรทัดเดียวกัน: ต่อเนื่องถึงคำถัดไป (เฉลยมนุษย์ 99% เป็นแบบนี้)
+                ge = max(gs + 0.04, nxt)
+            else:                       # คำท้ายบรรทัด: ฟังว่าลากโน้ตค้างถึงไหน ห้ามชนบรรทัดถัดไป
+                ge = _tail_end(vocals16, gs, ge, nxt) if vocals16 is not None else min(ge + HOLD_TAIL_S, nxt)
+                ge = max(gs + 0.04, min(ge, nxt))
         else:
-            ge = ge + HOLD_TAIL_S
+            ge = _tail_end(vocals16, gs, ge, 1e9) if vocals16 is not None else ge + HOLD_TAIL_S
         raw[li][wi] = (grp, gs, ge)

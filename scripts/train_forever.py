@@ -93,6 +93,7 @@ def main() -> int:
     ap.add_argument("--pool", type=int, default=6000, help="ขนาดกองเพลงที่จะสุ่มเลือก (--plan ของ harvest)")
     ap.add_argument("--workers", type=int, default=3)
     ap.add_argument("--sleep", type=float, default=4.0)
+    ap.add_argument("--weak-cats", default="thai,korean", help="หมวดที่ข้อมูลยังน้อย เก็บสลับรอบเว้นรอบ ("" = ปิด)")
     ap.add_argument("--min-free-gb", type=float, default=12.0, help="เหลือน้อยกว่านี้ = เลิกโหลดเพลงเพิ่ม (เทรนต่อได้)")
     ap.add_argument("--max-rounds", type=int, default=0, help="0 = ไม่จำกัด")
     args = ap.parse_args()
@@ -110,16 +111,20 @@ def main() -> int:
         # 1) โหลดเพลงที่เฉลยเป็นเวลารายคำเพิ่ม (เฉลยรายคำ = สอนและวัด "ทีละคำ" ได้จริง)
         before = counts()
         if not harvest_dead and free_gb() > args.min_free_gb:
-            log(f"รอบ {rnd}: โหลดเพลงเฉลยรายคำอีก {args.songs_per_round} เพลง ...")
-            rc = run([PY, "-u", "scripts/harvest.py", "--plan", str(args.pool), "--word-only",
-                      "--max-new", str(args.songs_per_round), "--batch", str(args.songs_per_round),
-                      "--cookies-dir", "dataset/_cookies", "--workers", str(args.workers),
-                      "--sleep", str(args.sleep)], hlog, timeout_s=4 * 3600)
+            log(f"รอบ {rnd}: โหลดเพลงอีก {args.songs_per_round} เพลง ...")
+            # สลับรอบ: รอบคี่เก็บภาษาที่ข้อมูลน้อย (ไทย/เกาหลี ไม่บังคับเฉลยรายคำ เพราะหายาก) · รอบคู่เก็บเฉลยรายคำทั่วไป
+            focus = rnd % 2 == 1 and args.weak_cats
+            cmd = [PY, "-u", "scripts/harvest.py", "--plan", str(args.pool),
+                   "--max-new", str(args.songs_per_round), "--batch", str(args.songs_per_round),
+                   "--cookies-dir", "dataset/_cookies", "--workers", str(args.workers), "--sleep", str(args.sleep)]
+            cmd += ["--cats", args.weak_cats] if focus else ["--word-only"]
+            log(f"รอบ {rnd}: {'เน้นภาษาที่ข้อมูลน้อย (' + args.weak_cats + ')' if focus else 'เฉลยรายคำทั่วไป'}")
+            rc = run(cmd, hlog, timeout_s=4 * 3600)
             after = counts()
             got = after["word_train"] + after["word_val"] - before["word_train"] - before["word_val"]
             rec.update({"harvest_rc": rc, "new_word_songs": got})
             log(f"รอบ {rnd}: ได้เพลงรายคำเพิ่ม {got} เพลง (rc={rc}) · รวม {after['word_train'] + after['word_val']}")
-            if got == 0 and rc == 0:
+            if got == 0 and rc == 0 and not focus:
                 harvest_dead = True       # กองเพลงหมด: รอบต่อไปข้ามการโหลด
                 log("ไม่มีเพลงเฉลยรายคำใหม่ให้โหลดแล้ว — จากนี้เทรนอย่างเดียว")
         else:
