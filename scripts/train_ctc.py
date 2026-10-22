@@ -23,22 +23,35 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 
+FPS = 50.0      # เฟรมผลลัพธ์ของ wav2vec2 ต่อวินาที (stride 320 ตัวอย่างที่ 16 kHz)
+
+
 def build_examples(songs, mms, max_clip_s: float):
-    """-> [(song, start_s, end_s, target_ids)] ข้ามคลิปที่แปลงเป็นอักษรละตินไม่ได้/สั้นเกิน"""
+    """-> [(song, start_s, end_s, target_ids, words)] · words = [(ตัวอักษรของคำ, เริ่ม, จบ) เทียบต้นคลิป] หรือ None
+
+    words มีเฉพาะเพลงที่เฉลยเป็น "เวลารายคำจริง" (ref_timing == word) เท่านั้น — เพลงเฉลยระดับบรรทัดมีเวลาคำแบบประมาณ
+    ถ้าเอามาสอนจะสอนเวลาที่ผิดให้โมเดล
+    """
     from app.ai.pipeline import align
     from app.ai.training.data import make_clips
 
     d = mms["dict"]
     ex = []
     for s in songs:
+        word_time = s.meta.get("ref_timing", "word") == "word"
         for c in make_clips(s, max_s=max_clip_s):
-            ids = [d[ch] for w in c["words"] for ch in align.romanize_word(w, s.language, mms["uroman"]) if ch in d]
-            frames = (c["end"] - c["start"]) * 50
             if c["end"] - c["start"] > max_clip_s + 1.0:        # บรรทัดเดียวยาวผิดปกติ (เฉลยระดับบรรทัด/ช่วงดนตรี) กิน VRAM เกินและเรียนรู้ไม่ได้
                 continue
+            wl = []
+            for txt, ws, we in c["ref_words"]:
+                wid = [d[ch] for ch in align.romanize_word(txt, s.language, mms["uroman"]) if ch in d]
+                if wid:
+                    wl.append((wid, ws - c["start"], we - c["start"]))
+            ids = [i for wid, _s, _e in wl for i in wid]
+            frames = (c["end"] - c["start"]) * FPS
             if len(ids) < 6 or len(ids) > frames * 0.8:
                 continue
-            ex.append((s, c["start"], c["end"], ids))
+            ex.append((s, c["start"], c["end"], ids, wl if word_time else None))
     return ex
 
 
@@ -51,26 +64,58 @@ def batches(examples, batch: int, shuffle: bool):
         random.shuffle(order)
     for b in range(0, len(order) - batch + 1, batch):
         items = [examples[i] for i in order[b:b + batch]]
-        waves, lens, targets, tlens = [], [], [], []
-        for s, t0, t1, ids in items:
+        waves, lens, targets, tlens, words = [], [], [], [], []
+        for s, t0, t1, ids, wl in items:
             v = np.asarray(s.vocals()[int(t0 * 16000):int(t1 * 16000)], dtype=np.float32)
             if len(v) < 16000:
                 break
             v = v / (np.abs(v).max() + 1e-6) * 0.9
+            bi = len(waves)
             waves.append(torch.from_numpy(v))
             lens.append(len(v))
             targets.append(torch.tensor(ids, dtype=torch.long))
             tlens.append(len(ids))
+            for wid, ws, we in (wl or []):
+                words.append((bi, int(ws * FPS), int(we * FPS + 0.999), wid))      # (รายการในก้อน, เฟรมเริ่ม, เฟรมจบ, ตัวอักษร)
         else:
             maxlen = max(lens)
             wav = torch.zeros(len(waves), maxlen)
             for i, w in enumerate(waves):
                 wav[i, :len(w)] = w
-            yield wav, torch.tensor(lens), torch.cat(targets), torch.tensor(tlens)
+            yield wav, torch.tensor(lens), torch.cat(targets), torch.tensor(tlens), words
+
+
+def word_loss(lpb, olens, words, dev):
+    """สอน "เวลาทีละคำ" ตรงๆ: บังคับให้ตัวอักษรของแต่ละคำออกมาภายในช่วงเฟรมของคำนั้นตามเฉลยมนุษย์
+
+    CTC ของทั้งคลิปบอกแค่ว่า "มีคำพวกนี้เรียงกัน" โมเดลเดาตำแหน่งเอง · ตัวนี้ตัดเฉพาะเฟรมของคำแล้วคิด CTC ต่อคำ
+    วางผิดช่วง = ตัวอักษรไม่อยู่ในหน้าต่างที่ตัดมา ค่าเสียหายจึงสูง -> โมเดลถูกลงโทษเมื่อวางเวลาผิด
+    """
+    import torch
+    import torch.nn.functional as F
+
+    segs, tgts, ilens, tlens = [], [], [], []
+    for bi, f0, f1, wid in words:
+        f0 = max(0, f0)
+        f1 = min(int(olens[bi].item()), f1)
+        if f1 - f0 < len(wid) + 1:      # เฟรมน้อยกว่าจำนวนตัวอักษร CTC คิดไม่ได้ (คำสั้น/ร้องเร็ว)
+            continue
+        segs.append(lpb[bi, f0:f1])
+        tgts.append(torch.tensor(wid, dtype=torch.long))
+        ilens.append(f1 - f0)
+        tlens.append(len(wid))
+    if not segs:
+        return None
+    x = lpb.new_zeros((len(segs), max(ilens), lpb.size(-1)))
+    for i, s in enumerate(segs):
+        x[i, :s.size(0)] = s
+    return F.ctc_loss(x.transpose(0, 1), torch.cat(tgts).to(dev), torch.tensor(ilens, device=dev),
+                      torch.tensor(tlens, device=dev), blank=0, zero_infinity=True)
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
+    ap.add_argument("--word-loss", type=float, default=1.0, help="น้ำหนักของการสอนเวลาทีละคำ (0 = ปิด ใช้ CTC ทั้งคลิปอย่างเดียวแบบเดิม)")
     ap.add_argument("--epochs", type=int, default=3)
     ap.add_argument("--batch", type=int, default=4)
     ap.add_argument("--lr", type=float, default=2e-5)
@@ -186,14 +231,18 @@ def main() -> int:
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     for ep in range(args.epochs):
-        for wav, lens, targets, tlens in batches(examples, args.batch, True):
+        for wav, lens, targets, tlens, words in batches(examples, args.batch, True):
             model.train()
             try:
                 wav = wav.to(dev)
                 with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=dev == "cuda"):
                     logits, olens = net(wav, lens.to(dev))
-                lp = F.log_softmax(logits.float(), dim=-1).transpose(0, 1)
+                lpb = F.log_softmax(logits.float(), dim=-1)          # (ก้อน, เฟรม, คลาส)
+                lp = lpb.transpose(0, 1)
                 loss = F.ctc_loss(lp, targets.to(dev), olens, tlens.to(dev), blank=0, zero_infinity=True)
+                wloss = word_loss(lpb, olens, words, dev) if args.word_loss > 0 else None
+                if wloss is not None:
+                    loss = loss + args.word_loss * wloss
                 opt.zero_grad(set_to_none=True)
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(params, 5.0)
