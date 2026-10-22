@@ -197,7 +197,10 @@ def fetch_song(ctx: dict, song: dict, yt_id: str | None, query: str, allow_remix
         return "มีแล้ว"
     yt = ctx["yt"]()
     if yt_id is None:
-        picked = pick_youtube(yt, song, query, allow_remix)
+        try:
+            picked = pick_youtube(yt, song, query, allow_remix)
+        except Exception as e:  # noqa: BLE001 — ค้นหาล้มเหลว (เน็ตสะดุด/โดนจำกัด) ต้องข้ามเพลงนี้ ไม่ใช่ล้มทั้งรอบ
+            return f"ค้นหาวิดีโอไม่ได้: {str(e)[:80]}"
         if picked is None:
             return "ไม่เจอวิดีโอที่ความยาวตรงกัน"
         yt_id = picked.video_id
