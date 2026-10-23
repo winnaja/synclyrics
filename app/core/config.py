@@ -258,7 +258,7 @@ class OverlaySettings(_Model):
     resume_s: float = Field(3.0, ge=1, le=15)       # เลื่อนอ่านเองแล้วกลับไปตามเพลงใน (วินาที)
     # ชดเชยความหน่วงของเสียงที่ออกลำโพงจริง: YouTube บอกเวลาที่ "ถอดรหัสถึงไหน" แต่เสียงยังต้องผ่านบัฟเฟอร์ของระบบอีก
     # (ลำโพงปกติ 50-150 ms · บลูทูธ 150-300 ms) โปรแกรมรู้เองไม่ได้ ต้องให้ผู้ใช้ตั้ง · บวก = เนื้อขึ้นเร็วขึ้น
-    latency_ms: int = Field(0, ge=-1000, le=1000)
+    latency_ms: int = Field(300, ge=-1000, le=1000)
     click_seek: bool = True                          # คลิกบรรทัดเพื่อกรอ YouTube ไปที่บรรทัดนั้น
     show_source: bool = True                         # แสดงป้ายแหล่งเนื้อเพลง
     translation_size: float = Field(0.55, ge=0.3, le=1.2)

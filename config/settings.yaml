@@ -123,7 +123,7 @@ overlay:
   auto_scroll: true
   scroll_lead_s: 0.3
   resume_s: 3.0
-  latency_ms: 0          # ชดเชยความหน่วงจนเห็นเนื้อตรงกับเสียง (บวก = เนื้อขึ้นเร็วขึ้น)
+  latency_ms: 300          # ชดเชยความหน่วงจนเห็นเนื้อตรงกับเสียง (บวก = เนื้อขึ้นเร็วขึ้น)
   click_seek: true
   show_source: true
   translation_size: 0.55
