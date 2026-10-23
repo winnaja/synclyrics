@@ -34,12 +34,13 @@ Window {
     }
 
     readonly property color fg: "#F2F2F5"
-    readonly property color fg2: "#9A9BA8"
+    readonly property color fg2: "#B1B2C0"
     readonly property color panel: "#1b1c25"
     readonly property color card: "#20212c"
     readonly property color field: "#2b2d3b"
     readonly property color line: "#2c2e3d"
     readonly property color accent: "#A5B4FC"
+    readonly property real contentW: Math.min(width - nav.width - 56, 880)   // เนื้อหากว้างสุด 880 px (จอกว้างก็ไม่ยืด)
     property bool advanced: false     // แสดงตัวเลือกขั้นสูง
     // ตัวอย่างสดย่อเหลือแถบเตี้ยๆ เมื่อเลื่อนลง (ไม่กินที่อ่านการตั้งค่า) · hysteresis กันสลับไปมาตอนความสูงของรายการเปลี่ยน
     property bool previewPinned: false          // true = ผู้ใช้กดขยายค้างไว้
@@ -93,17 +94,16 @@ Window {
                 if (kids[i].want === true) return true
             return false
         }
-        height: any ? head.height + body.height + 22 : 0
+        height: any ? head.height + body.height + 30 : 0
         Text {
             id: head
             readonly property bool crumb: win.q.length > 0 && cd.pageIdx >= 0
             visible: cd.title.length > 0 || crumb
             text: crumb ? win.pages[cd.pageIdx].t + (cd.title.length > 0 ? "  ›  " + cd.title : "") : cd.title
-            color: crumb ? win.accent : win.fg2
-            font.pixelSize: 12; font.weight: Font.DemiBold; font.family: cfg.look_font_family
-            font.letterSpacing: 0.6
+            color: crumb ? win.accent : win.fg
+            font.pixelSize: 15; font.weight: Font.DemiBold; font.family: cfg.look_font_family
             leftPadding: 4
-            height: visible ? 26 : 0
+            height: visible ? 34 : 0
             verticalAlignment: Text.AlignTop
             TapHandler { enabled: head.crumb; onTapped: win.gotoPage(cd.pageIdx) }   // กดหัวข้อผลค้นหา = ไปหมวดนั้น
             HoverHandler { enabled: head.crumb; cursorShape: Qt.PointingHandCursor }
@@ -200,7 +200,7 @@ Window {
             spacing: 2
             Text { text: r2.label; color: win.fg; font.pixelSize: 14; font.family: cfg.look_font_family; width: parent.width; wrapMode: Text.Wrap
                 visible: r2.label.length > 0 }
-            Text { visible: r2.hint.length > 0; text: r2.hint; color: win.fg2; font.pixelSize: 12; font.family: cfg.look_font_family; width: parent.width; wrapMode: Text.Wrap }
+            Text { visible: r2.hint.length > 0; text: r2.hint; color: win.fg2; font.pixelSize: 13; font.family: cfg.look_font_family; width: parent.width; wrapMode: Text.Wrap }
         }
         Item {
             id: slot
@@ -504,7 +504,7 @@ Window {
         id: top
         x: nav.width + 28
         y: 14
-        width: parent.width - nav.width - 56
+        width: win.contentW
         height: 56
         Text {
             anchors.verticalCenter: parent.verticalCenter
@@ -553,7 +553,7 @@ Window {
         id: stickyPreview
         x: nav.width + 28
         y: top.y + top.height + 6
-        width: parent.width - nav.width - 56
+        width: win.contentW
         compact: win.previewCompact
         height: visible ? (compact ? 76 : 150) : 0
         Behavior on height { NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }
@@ -565,7 +565,7 @@ Window {
         id: scroller
         x: nav.width + 28
         y: stickyPreview.y + (stickyPreview.visible ? stickyPreview.height + 10 : 0)
-        width: parent.width - nav.width - 56
+        width: win.contentW
         height: parent.height - y - 14
         contentWidth: width
         contentHeight: pageCol.implicitHeight + 24
@@ -587,23 +587,17 @@ Window {
             // ---------------- ตั้งค่าด่วน ----------------
             Column {
                 property int pgIdx: 9; visible: win.show(9); width: parent.width; spacing: 6
-                Intro { text: "ตัวเลือกที่ใช้บ่อยรวมไว้ที่เดียว เห็นผลที่ตัวอย่างด้านบนทันที · อยากปรับละเอียดกว่านี้ไปที่หมวดอื่นทางซ้าย (เปิด \"โหมดละเอียด\" ที่มุมขวาบนเพื่อดูตัวเลือกทั้งหมด)" }
+                Intro { text: "เฉพาะตัวเลือกที่ใช้บ่อย · อยากปรับละเอียดกว่านี้เลือกหมวดทางซ้าย หรือพิมพ์ค้นหาที่มุมขวาบน" }
                 Card { title: "หน้าตา"
                     Row2 { label: "ธีม"; hint: "สีพื้นหลังและความโปร่งใสโดยรวม"; wide: true
                         Segment { key: "ov_theme"; options: [{v:"soft_dark",t:"Soft Dark"},{v:"pure_black",t:"Pure Black"},{v:"frosted",t:"Frosted Glass"},{v:"minimal_transparent",t:"โปร่งใส"},{v:"light",t:"Light"}] } }
                     Row2 { label: "ขนาดตัวอักษร (หน้าต่างลอย)"; SSlider { key: "ov_font_size"; from: 12; to: 120; step: 1; decimals: 0; unit: " px" } }
-                    Row2 { label: "ขนาดตัวอักษร (โหมดเต็ม)"; hint: "เป็นเท่าของขนาดมาตรฐาน"; SSlider { key: "fw_font_scale"; from: 0.5; to: 2.0; step: 0.05 } }
-                    Row2 { label: "การจัดวางข้อความ"; wide: true
-                        Segment { key: "ov_align"; options: [{v:"left",t:"ซ้าย"},{v:"center",t:"กลาง"},{v:"right",t:"ขวา"}] } }
-                    Row2 { label: "สีข้อความที่ร้องแล้ว"; wide: true; SColor { key: "ov_text_color" } }
                 }
                 Card { title: "การเคลื่อนไหว"
                     Row2 { label: "ชุดแอนิเมชัน"; hint: "ชุดสำเร็จรูป · \"นุ่มนวล\" ใกล้ Apple Music ที่สุด"; wide: true
                         Segment { key: "ov_anim_preset"; options: [{v:"smooth",t:"นุ่มนวล (แบบ Apple)"},{v:"balanced",t:"สมดุล"},{v:"bouncy",t:"เด้งนิดๆ"},{v:"snappy",t:"ฉับไว"},{v:"none",t:"ไม่เคลื่อนไหว"}] } }
                     Row2 { label: "ไฮไลต์คำที่ร้อง"; hint: "เติมสีไล่ตามเสียง / ทีละคำ / เรืองแสง / ทั้งบรรทัด"; wide: true
                         Segment { key: "ov_highlight"; options: [{v:"fill",t:"เติมสี"},{v:"word",t:"ทีละคำ"},{v:"glow",t:"เรืองแสง"},{v:"line",t:"ทั้งบรรทัด"}] } }
-                    Row2 { label: "ลอย / ขยาย / เรืองแสง"; hint: "ทั้งคำ = ทันทีที่ถึงคำ · ทีละตัวอักษร = ไล่ตามเสียง (ปรับปริมาณที่หมวดแอนิเมชัน)"; wide: true
-                        Segment { key: "ov_word_anim"; options: [{v:"none",t:"ไม่มี"},{v:"word",t:"ทั้งคำ"},{v:"char",t:"ทีละตัวอักษร"}] } }
                     Row2 { label: "ชดเชยความหน่วง"; hint: "เสียงร้องไปแล้วเนื้อพึ่งขึ้น = เพิ่มค่านี้ · เวลาที่ YouTube บอกคือเวลาถอดรหัส ไม่ใช่เวลาที่เสียงออกหูฟังจริง"; SSlider { key: "ov_latency_ms"; from: -500; to: 800; step: 10; decimals: 0; unit: " ms" } }
                     Row2 { label: "เลื่อนบรรทัดล่วงหน้า"; hint: "ถ้ารู้สึกว่าบรรทัดเลื่อนช้ากว่าเสียง เพิ่มค่านี้"; SSlider { key: "ov_scroll_lead_s"; from: 0; to: 1; step: 0.05; decimals: 2; unit: " วิ" } }
                     Row2 { label: "ลดการเคลื่อนไหว"; hint: "ปิดการเลื่อน/ย่อ/ลอย ใช้การเปลี่ยนทันที"; SSwitch { key: "ov_reduced_motion" } }
@@ -611,7 +605,6 @@ Window {
                 Card { title: "เนื้อเพลงและ AI"
                     Row2 { label: "ให้ AI จัดเวลาจากเสียงจริง"; hint: "เนื้อเพลงยึดตามเว็บ AI ฟังเสียงเพื่อทำให้เวลาตรง (ใช้การ์ดจอ NVIDIA)"; SSwitch { key: "ai_enabled" } }
                     Row2 { label: "แปลเป็นภาษาไทย"; hint: "เพลงที่ไม่ใช่ภาษาไทยแปลด้วยโมเดลในเครื่อง · คำแปลแสดงเมื่อกดปุ่มแปล"; SSwitch { key: "ai_translate" } }
-                    Row2 { label: "ตัดบรรทัดที่ยาวเกินให้สั้นลง"; hint: "แบบ Apple Music — ตัดที่วรรคตอน/คำเชื่อม (มีผลตอนโหลดเพลงครั้งถัดไป)"; SSwitch { key: "ls_split_long_lines" } }
                     Row2 { label: "ปรับเวลาเนื้อเพลงของเพลงนี้"; hint: "บวก = เนื้อเพลงช้าลง · จำแยกตามเพลง"
                         Row { anchors.right: parent.right; spacing: 8
                             Pill { label: "−0.1"; onClicked: player.adjustOffset(-0.1) }
