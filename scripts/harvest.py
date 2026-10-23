@@ -38,8 +38,8 @@ SEED_PLAYLISTS = [
 ]
 
 # เพลย์ลิสต์ YouTube ของผู้ใช้ที่ต้องดึงทั้งหมดก่อนเสมอ (ไม่นับในโควตาหมวด) — เสียงมาจากวิดีโอในเพลย์ลิสต์โดยตรง ส่วนเนื้อเพลงหาจาก NetEase ตามชื่อ
-YT_PLAYLISTS = [
-    "https://www.youtube.com/playlist?list=PLo_kKd-WztIbIfInm6F8g38MM5CYpg0RG",    # "K" (K-pop ของผู้ใช้ ~94 เพลง)
+YT_PLAYLISTS: list[str] = [
+    # ใส่ลิงก์เพลย์ลิสต์ของตัวเองที่นี่ หรือส่งตอนรันด้วย --yt-playlist <ลิงก์> (ใส่ซ้ำได้)
 ]
 
 # แผนหมวด: สัดส่วนของจำนวนเพลงรวม · playlists = id ที่ตรวจแล้ว · keywords = ค้นเพลย์ลิสต์ NetEase แล้วเอาอันที่คนฟังมากสุดไม่เกิน top
