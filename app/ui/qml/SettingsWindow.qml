@@ -526,6 +526,7 @@ Window {
                         Segment { key: "ov_highlight"; options: [{v:"fill",t:"เติมสี"},{v:"word",t:"ทีละคำ"},{v:"glow",t:"เรืองแสง"},{v:"line",t:"ทั้งบรรทัด"}] } }
                     Row2 { label: "ลอย / ขยาย / เรืองแสง"; hint: "ทั้งคำ = ทันทีที่ถึงคำ · ทีละตัวอักษร = ไล่ตามเสียง (ปรับปริมาณที่หมวดแอนิเมชัน)"; wide: true
                         Segment { key: "ov_word_anim"; options: [{v:"none",t:"ไม่มี"},{v:"word",t:"ทั้งคำ"},{v:"char",t:"ทีละตัวอักษร"}] } }
+                    Row2 { label: "ชดเชยความหน่วง"; hint: "เสียงร้องไปแล้วเนื้อพึ่งขึ้น = เพิ่มค่านี้ · เวลาที่ YouTube บอกคือเวลาถอดรหัส ไม่ใช่เวลาที่เสียงออกหูฟังจริง"; SSlider { key: "ov_latency_ms"; from: -500; to: 800; step: 10; decimals: 0; unit: " ms" } }
                     Row2 { label: "เลื่อนบรรทัดล่วงหน้า"; hint: "ถ้ารู้สึกว่าบรรทัดเลื่อนช้ากว่าเสียง เพิ่มค่านี้"; SSlider { key: "ov_scroll_lead_s"; from: 0; to: 1; step: 0.05; decimals: 2; unit: " วิ" } }
                     Row2 { label: "ลดการเคลื่อนไหว"; hint: "ปิดการเลื่อน/ย่อ/ลอย ใช้การเปลี่ยนทันที"; SSwitch { key: "ov_reduced_motion" } }
                 }

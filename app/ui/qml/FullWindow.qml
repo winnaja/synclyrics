@@ -16,7 +16,8 @@ Window {
     // เวลาของเพลง (วินาที) + เวลาแอนิเมชันพื้นหลัง อัปเดตจาก FrameAnimation เดียว
     property real pos: 0
     property real t: 0
-    readonly property real lyricPos: pos - player.lyricsOffset
+    // + ov_latency_ms: ชดเชยความหน่วงจนเห็นเนื้อตรงกับเสียง (เวลาจาก YouTube ไม่ใช่เวลาที่เสียงออกลำโพงจริง)
+    readonly property real lyricPos: pos - player.lyricsOffset + cfg.ov_latency_ms / 1000
     readonly property bool fs: visibility === Window.FullScreen
     property bool idle: false
 

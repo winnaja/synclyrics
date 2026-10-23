@@ -16,7 +16,8 @@ Window {
     // เวลาของเพลง (วินาที) อัปเดตทุกเฟรมจาก FrameAnimation เดียวเท่านั้น (ไม่ใช้ Timer)
     property real pos: 0
     // เวลาที่ใช้หาบรรทัด = เวลาเสียง - offset ที่ผู้ใช้ปรับ
-    readonly property real lyricPos: pos - player.lyricsOffset
+    // + ov_latency_ms: ชดเชยความหน่วงจนเห็นเนื้อตรงกับเสียง (เวลาจาก YouTube ไม่ใช่เวลาที่เสียงออกลำโพงจริง)
+    readonly property real lyricPos: pos - player.lyricsOffset + cfg.ov_latency_ms / 1000
     // ค่า "full" เป็นของเก่า (ตอนนี้โหมดเต็มเป็นหน้าต่างแยก) — มองเป็น focus เสมอ
     readonly property string mode: cfg.ov_mode === "full" ? "focus" : cfg.ov_mode
     readonly property bool locked: cfg.ov_locked
