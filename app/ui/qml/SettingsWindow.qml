@@ -427,20 +427,27 @@ Window {
     property int page: 9
     // title / คำที่ใช้ค้น / กลุ่มที่ปุ่ม "คืนค่า" จะรีเซ็ต
     readonly property var pages: [
-        { t: "ทั่วไป", g: "general", n: "การเริ่มต้น ปุ่มปิด ข้อมูล" },
-        { t: "โหมดเต็ม", g: "full", n: "หน้าต่างเต็ม ปก วอลลุ่ม พื้นหลัง" },
+        { t: "โปรแกรมและชุดค่า", g: "general", n: "การเริ่มต้น ปุ่มปิด ข้อมูล" },
+        { t: "หน้าต่างเต็ม", g: "full", n: "หน้าต่างเต็ม ปก วอลลุ่ม พื้นหลัง" },
         { t: "หน้าต่างลอย", g: "float", n: "ตำแหน่ง ขนาด จอ" },
-        { t: "ตัวอักษร", g: "font", n: "ฟอนต์ สี ขนาด" },
-        { t: "พื้นหลังและธีม", g: "theme", n: "ธีม ความโปร่งใส" },
-        { t: "เนื้อเพลง", g: "lyrics", n: "ไฮไลต์ เลื่อน คำแปล" },
-        { t: "แอนิเมชัน", g: "anim", n: "ชุด คาราโอเกะ" },
-        { t: "การซิงก์", g: "ai", n: "YouTube เวลา ค้นหา AI ฟังเสียง คำแปล" },
+        { t: "ตัวอักษรและสี", g: "font", n: "ฟอนต์ สี ขนาด" },
+        { t: "ธีมและพื้นหลัง", g: "theme", n: "ธีม ความโปร่งใส" },
+        { t: "การอ่านเนื้อเพลง", g: "lyrics", n: "ไฮไลต์ เลื่อน คำแปล" },
+        { t: "การเคลื่อนไหว", g: "anim", n: "ชุด คาราโอเกะ" },
+        { t: "เวลาและ AI", g: "ai", n: "YouTube เวลา ค้นหา AI ฟังเสียง คำแปล" },
         { t: "คีย์ลัด", g: "hotkeys", n: "ทั้งระบบ" },
         { t: "ตั้งค่าด่วน", g: "", n: "ใช้บ่อย เริ่มที่นี่ ธีม ขนาด แอนิเมชัน AI" },
         { t: "แหล่งเนื้อเพลง", g: "sources", n: "เว็บ LRCLIB NetEase QQ คำบรรยาย ตัดบรรทัด รวมหลายแหล่ง" }
     ]
     // ลำดับในแถบซ้าย (ค่าคือ index ของ pages) — เริ่มที่ "ตั้งค่าด่วน" แล้วค่อยลงรายละเอียด
-    readonly property var navOrder: [9, 5, 10, 6, 3, 4, 1, 2, 7, 0, 8]
+    // จัดกลุ่มตามสิ่งที่อยากทำ: h = หัวข้อกลุ่ม · pg = index ของ pages (ทุกหมวดเดิมยังอยู่ครบ)
+    readonly property var navItems: [
+        { h: "เริ่มที่นี่" }, { pg: 9 },
+        { h: "หน้าตา" }, { pg: 3 }, { pg: 4 }, { pg: 6 },
+        { h: "เนื้อเพลง" }, { pg: 5 }, { pg: 10 }, { pg: 7 },
+        { h: "หน้าต่าง" }, { pg: 1 }, { pg: 2 },
+        { h: "โปรแกรม" }, { pg: 0 }, { pg: 8 }
+    ]
     function show(p) { return win.q.length > 0 || win.page === p }
 
     Rectangle {
@@ -449,20 +456,36 @@ Window {
         height: parent.height
         color: win.panel
         Text { id: navTitle; x: 20; y: 20; text: "ตั้งค่า"; color: win.fg; font.pixelSize: 22; font.weight: Font.Bold; font.family: cfg.look_font_family }
+        Flickable {
+            x: 10; y: 64; width: parent.width - 20; height: parent.height - 72
+            contentWidth: width; contentHeight: navCol.implicitHeight + 8
+            clip: true
+            boundsBehavior: Flickable.StopAtBounds
         Column {
-            x: 10; y: 64; width: parent.width - 20; spacing: 2
+            id: navCol
+            width: parent.width; spacing: 2
             Repeater {
-                model: win.navOrder
-                Rectangle {
+                model: win.navItems
+                Item {
+                    id: ni
                     required property int index
-                    required property int modelData
-                    readonly property int pg: modelData
-                    activeFocusOnTab: true
+                    required property var modelData
+                    readonly property bool isHead: modelData.h !== undefined
+                    readonly property int pg: isHead ? -1 : modelData.pg
+                    width: parent.width
+                    height: isHead ? 30 : 38
+                    Text { visible: ni.isHead; x: 14; anchors.bottom: parent.bottom; anchors.bottomMargin: 4
+                        text: ni.isHead ? ni.modelData.h : ""; color: win.fg2; opacity: 0.75
+                        font.pixelSize: 11; font.weight: Font.DemiBold; font.family: cfg.look_font_family; font.letterSpacing: 0.6 }
+                Rectangle {
+                    visible: !ni.isHead
+                    readonly property int pg: ni.pg
+                    activeFocusOnTab: !ni.isHead
                     width: parent.width; height: 38; radius: 10
                     border.width: activeFocus ? 2 : 0
                     border.color: "#FFFFFF"
                     color: win.page === pg && win.q.length === 0 ? "#2d3044" : (nh.hovered ? "#252736" : "transparent")
-                    Text { anchors.verticalCenter: parent.verticalCenter; x: 14; text: win.pages[parent.pg].t
+                    Text { anchors.verticalCenter: parent.verticalCenter; x: 14; text: parent.pg >= 0 ? win.pages[parent.pg].t : ""
                         color: win.page === parent.pg && win.q.length === 0 ? win.fg : win.fg2
                         font.pixelSize: 14; font.family: cfg.look_font_family; font.weight: parent.pg === 9 ? Font.DemiBold : Font.Normal }
                     HoverHandler { id: nh }
@@ -470,7 +493,9 @@ Window {
                     Keys.onSpacePressed: { win.query = ""; win.page = pg }
                     Keys.onReturnPressed: { win.query = ""; win.page = pg }
                 }
+                }
             }
+        }
         }
     }
 
