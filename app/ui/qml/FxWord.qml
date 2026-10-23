@@ -15,6 +15,7 @@ Item {
     property real prog: 0           // ความคืบหน้าการเติมสีของคำ 0..1
     property real sinceEnd: -1      // วินาทีนับจากร้องคำนี้จบ (ลบ = ยังไม่จบ)
     property bool current: false    // อยู่ในบรรทัดที่กำลังร้อง
+    property bool lineDone: false   // บรรทัดนี้ร้องจบแล้ว (เลยเวลาจบคำสุดท้าย + ค้างหลังร้องจบ) แม้บรรทัดถัดไปยังไม่เริ่ม
     property bool still: false      // ลดการเคลื่อนไหว
     property bool emphasis: false   // คำเน้น (ลากเสียงยาว) — เรืองแสง+ขยายแยกจากโหมดคำ
     property real pixelSize: 34
@@ -37,7 +38,7 @@ Item {
     readonly property bool singing: current && prog > 0 && prog < 1
     // "ทำงานอยู่": เริ่มร้องแล้ว และ (ยังร้องอยู่ | ค้างไว้จนจบบรรทัด | อยู่ในช่วงค้างหลังร้องจบ)
     readonly property bool act: current && prog > 0
-        && (prog < 1 || cfg.ov_word_stay || sinceEnd < cfg.ov_word_hold_ms / 1000)
+        && (prog < 1 || (cfg.ov_word_stay && !lineDone) || sinceEnd < cfg.ov_word_hold_ms / 1000)
     readonly property bool emphNow: emphasis && act
 
     readonly property string mode: still ? "none" : cfg.ov_word_anim

@@ -57,6 +57,18 @@ Item {
     readonly property int distance: currentLine < 0 ? index + 1
         : (inGroup ? (isCurrent ? 0 : 1) : (index < groupFirst ? groupFirst - index : index - groupLast))
 
+    // เวลาจบคำสุดท้ายที่ร้องจริงของบรรทัด (ไม่นับคำเว้นและเสียงประสาน) · "จบบรรทัด" ของเอฟเฟกต์ค้าง = เวลานี้ + ค้างหลังร้องจบ ไม่ใช่ตอนบรรทัดถัดไปเริ่ม
+    // (ไม่งั้นช่องว่างระหว่างบรรทัดทำให้คำท้ายลอย/เรืองแสงค้างอยู่จนบรรทัดถัดไปเริ่ม)
+    readonly property real sungEnd: {
+        var m = 0
+        for (var i = 0; i < words.length; ++i) {
+            var w = words[i]
+            if (w.spacer !== true && w.background !== true) m = Math.max(m, w.end)
+        }
+        return m
+    }
+    readonly property bool lineDone: isCurrent && sungEnd > 0 && lyricPos >= sungEnd + cfg.ov_word_hold_ms / 1000
+
     readonly property bool isSecond: voice === "second"
     readonly property bool isBackground: voice === "background"
     readonly property string alignMode: isSecond ? "right" : (forceAlign.length > 0 ? forceAlign : cfg.ov_align)
@@ -213,6 +225,7 @@ Item {
                         prog: w.prog
                         sinceEnd: root.lyricPos - w.modelData.end
                         current: root.isCurrent
+                        lineDone: root.lineDone
                         still: root.still
                         emphasis: w.emph
                         pixelSize: root.baseSize * (w.bgWord ? 0.62 : 1.0)

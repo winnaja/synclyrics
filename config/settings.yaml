@@ -156,7 +156,7 @@ fullwindow:
   edge_blur: 0.8
   edge_fade: 0.14
   idle_hide: true
-  idle_hide_s: 3.0
+  idle_hide_s: 1.0
 hotkeys:
   show_hide: Ctrl+Alt+L
   click_through: Ctrl+Alt+K

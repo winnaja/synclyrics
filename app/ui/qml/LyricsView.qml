@@ -20,7 +20,9 @@ Item {
 
     // เวลาของเนื้อเพลง (วินาที) ส่งเข้ามาทุกเฟรม
     property real lyricPos: 0
-    property int currentLine: -1
+    property int currentLine: -1      // บรรทัดที่ไฮไลต์ — เปลี่ยนตามเวลาจริงเท่านั้น (start <= เวลา) ไม่ขึ้นก่อนเสียงร้อง
+    property int scrollLine: -1       // บรรทัดที่จอเลื่อนไปหา — ล่วงหน้า cfg.ov_scroll_lead_s เสมอ (แยกจากไฮไลต์: เลื่อนก่อนได้โดยไม่ตัดคำท้ายบรรทัดเดิม)
+    property int scrollGroupFirst: -1
     property bool following: true
     readonly property int lineCount: list.count
 
@@ -57,17 +59,40 @@ Item {
     readonly property real springD: Math.max(0.05, Math.min(0.9,
         0.5 * cfg.look_spring_damping / (2 * Math.sqrt(cfg.look_spring_stiffness))))
 
-    onLyricPosChanged: {
-        var i = clockBridge.lineIndexAtLead(lyricPos, cfg.ov_scroll_lead_s)
-        if (i !== currentLine)
-            currentLine = i
+    // คำนวณบรรทัดไฮไลต์/บรรทัดที่จอควรเลื่อนไปหา จากเวลาปัจจุบัน (เรียกทุกเฟรมที่เวลาเปลี่ยน และเมื่อข้อมูลเวลาถูกแก้ตอนหยุดเพลงอยู่)
+    function recompute() {
+        var i = clockBridge.lineIndexAt(lyricPos)
+        var s = clockBridge.scrollIndexAt(lyricPos, cfg.ov_scroll_lead_s)
+        if (i !== currentLine) currentLine = i
+        if (s !== scrollLine) scrollLine = s
     }
+    onLyricPosChanged: recompute()
     onCurrentLineChanged: {
-        var oldFirst = groupFirst
         updateGroup()
-        // ย้ายภายในท่อนเดียวกัน = ไม่เลื่อนจอ (ไฮไลต์ลงมาบรรทัดล่างเอง) · ขึ้นท่อนใหม่ค่อยเลื่อน
-        if (following && cfg.ov_auto_scroll && (groupFirst !== oldFirst || currentLine < 0))
-            followTo(groupFirst >= 0 ? groupFirst : currentLine)
+        clockBridge.debugLineChange(lyricPos, cfg.ov_scroll_lead_s, currentLine, scrollLine)
+    }
+    // จอเลื่อนตามบรรทัดที่ "ควรเลื่อนไปหา" · ย้ายภายในท่อนเดียวกัน = ไม่เลื่อนจอ (ไฮไลต์ลงมาบรรทัดล่างเอง) · ขึ้นท่อนใหม่ค่อยเลื่อน
+    function scrollGroup(idx) {
+        if (idx < 0) return [-1, -1]
+        return cfg.ov_group_lines ? clockBridge.groupRange(idx, cfg.ov_group_gap_s) : [idx, idx]
+    }
+    onScrollLineChanged: {
+        var r = scrollGroup(scrollLine)
+        var changed = r[0] !== scrollGroupFirst || scrollLine < 0
+        scrollGroupFirst = r[0]
+        clockBridge.debugLineChange(lyricPos, cfg.ov_scroll_lead_s, currentLine, scrollLine)
+        if (following && cfg.ov_auto_scroll && changed)
+            followTo(r[0] >= 0 ? r[0] : scrollLine)
+    }
+    // ข้อมูลเวลาถูกแก้ระหว่างเล่น/หยุด (AI จัดเวลาใหม่, โหลดเพลงใหม่): คำนวณบรรทัดใหม่ทันที ไม่รอให้เวลาเดิน
+    Connections {
+        target: lyricsModel
+        function onDataChanged() { root.recompute() }
+        function onModelReset() { root.recompute() }
+    }
+    function lineInfo(i) {
+        var it = list.itemAtIndex(i)
+        return it ? { isCurrent: it.isCurrent, lineDone: it.lineDone, sungEnd: it.sungEnd } : null
     }
     function updateGroup() {
         if (currentLine < 0) { groupFirst = -1; groupLast = -1; return }
@@ -77,15 +102,17 @@ Item {
     }
     Connections {
         target: cfg
-        function onOv_group_linesChanged() { root.updateGroup() }
-        function onOv_group_gap_sChanged() { root.updateGroup() }
+        function onOv_group_linesChanged() { root.updateGroup(); root.scrollGroupFirst = root.scrollGroup(root.scrollLine)[0] }
+        function onOv_group_gap_sChanged() { root.updateGroup(); root.scrollGroupFirst = root.scrollGroup(root.scrollLine)[0] }
+        function onOv_scroll_lead_sChanged() { root.recompute() }
     }
 
     // เลื่อนให้บรรทัด idx อยู่กลางจอ: ให้ ListView คำนวณปลายทาง แล้วคืนค่าเดิมและปล่อยสปริงวิ่งไป
     // contentY ที่ทำให้บรรทัด idx (หรือทั้งท่อนถ้าอยู่ในท่อนหลายบรรทัด) อยู่กลางจอพอดี — คำนวณจากตำแหน่งจริงของบรรทัด
     function targetY(idx) {
         var first = idx, last = idx
-        if (groupLast > groupFirst && idx >= groupFirst && idx <= groupLast) { first = groupFirst; last = groupLast }
+        var g = scrollGroup(idx)
+        if (g[1] > g[0] && idx >= g[0] && idx <= g[1]) { first = g[0]; last = g[1] }
         var a = list.itemAtIndex(first)
         var b = list.itemAtIndex(last)
         if (!a || !b)
@@ -95,7 +122,7 @@ Item {
 
     // ใช้ตรวจ/ไล่บั๊ก: ระยะ (px) ที่บรรทัดปัจจุบัน/ท่อนปัจจุบันอยู่ห่างจากกลางจอ (0 = กลางพอดี) · NaN = ไม่มีบรรทัดปัจจุบัน
     function centerOffset() {
-        var y = targetY(currentLine)
+        var y = targetY(scrollLine)
         return isNaN(y) ? NaN : y - list.contentY
     }
 
@@ -143,11 +170,11 @@ Item {
     Timer {
         interval: 300
         repeat: true
-        running: root.following && cfg.ov_auto_scroll && root.currentLine >= 0 && root.visible
+        running: root.following && cfg.ov_auto_scroll && root.scrollLine >= 0 && root.visible
         onTriggered: {
-            var y = root.targetY(root.currentLine)
+            var y = root.targetY(root.scrollLine)
             if (!isNaN(y) && Math.abs(list.contentY - y) > 3)
-                root.followTo(root.currentLine, Math.abs(list.contentY - y) < 40)
+                root.followTo(root.scrollLine, Math.abs(list.contentY - y) < 40)
         }
     }
 
@@ -164,12 +191,12 @@ Item {
         onTriggered: {
             root.following = true
             if (cfg.ov_auto_scroll)
-                root.followTo(root.currentLine)
+                root.followTo(root.scrollLine)
         }
     }
 
     // เปลี่ยนโหมด/ขนาด -> จัดบรรทัดปัจจุบันให้อยู่กลางใหม่
-    onHeightChanged: if (following) Qt.callLater(function() { root.followTo(root.currentLine, true) })
+    onHeightChanged: if (following) Qt.callLater(function() { root.followTo(root.scrollLine, true) })
 
     SpringAnimation {
         id: spring
@@ -237,8 +264,8 @@ Item {
 
         onMovementStarted: root.userScrolled()
         onCountChanged: {
-            if (count === 0)
-                root.currentLine = -1
+            if (count === 0) { root.currentLine = -1; root.scrollLine = -1 }
+            else root.recompute()
             root.following = true
             spring.stop()
         }

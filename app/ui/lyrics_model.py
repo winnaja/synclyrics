@@ -195,6 +195,12 @@ def find_line_index(starts: list[float], position: float) -> int:
     return bisect_right(starts, position) - 1
 
 
+def scroll_line_index(starts: list[float], position: float, lead: float) -> int:
+    """บรรทัดที่จอควรเลื่อนไปหา = บรรทัดสุดท้ายที่เริ่มภายใน position + lead (lead <= 0 = บรรทัดปัจจุบันพอดี)
+    ต่างจากบรรทัดที่ไฮไลต์: ไม่ขึ้นกับเวลาจบของบรรทัดก่อนหน้า (บรรทัดที่ต่อกันแบบ end = start ถัดไปก็เลื่อนล่วงหน้าได้)"""
+    return find_line_index(starts, position + max(0.0, lead))
+
+
 _MODEL_CLASS: type | None = None
 
 
@@ -260,7 +266,7 @@ def make_lyrics_model_class() -> type:
             if len(rows) != len(self._rows):
                 self.set_lyrics(lyrics)
                 return
-            changed = False
+            changed_rows: list[int] = []
             for i, new in enumerate(rows):
                 old = self._rows[i]
                 keep_tr, keep_ro = old["translation"], old["romanization"]
@@ -268,11 +274,13 @@ def make_lyrics_model_class() -> type:
                     continue
                 new["translation"], new["romanization"] = new["translation"] or keep_tr, new["romanization"] or keep_ro
                 self._rows[i] = new
-                idx = self.index(i, 0)
-                self.dataChanged.emit(idx, idx, [role_ids[n] for n in ("start", "end", "voice", "words", "gapAfter", "gapStart", "translation", "romanization")])
-                changed = True
-            if changed:
+                changed_rows.append(i)
+            if changed_rows:
+                # อัปเดตดัชนีเวลาก่อนบอก UI (QML คำนวณบรรทัดปัจจุบันใหม่ทันทีที่ได้ dataChanged — ต้องเห็นเวลาใหม่ ไม่ใช่เวลาเก่า)
                 self._starts = [r["start"] for r in self._rows]
+                for i in changed_rows:
+                    idx = self.index(i, 0)
+                    self.dataChanged.emit(idx, idx, [role_ids[n] for n in ("start", "end", "voice", "words", "gapAfter", "gapStart", "translation", "romanization")])
 
         def _mark_emphasis(self, rows: list[dict[str, Any]]) -> bool:
             """ใส่ธง emphasis ให้คำที่ AI เลือกในบรรทัดที่ข้อความตรงกัน (บรรทัดซ้ำ/ฮุกได้ทุกบรรทัด) · คืน True ถ้ามีแถวใดเปลี่ยน"""
@@ -360,8 +368,29 @@ def make_lyrics_model_class() -> type:
                     return j
             return i
 
+        def scroll_index_at(self, position: float, lead: float = 0.0) -> int:
+            """บรรทัดที่ "จอควรเลื่อนไปหา" = บรรทัดที่เริ่มภายใน position + lead (เลื่อนล่วงหน้า lead วินาทีเสมอ ไม่ว่าบรรทัดก่อนหน้าจะต่อกันหรือมีช่องว่าง)
+            แยกจากบรรทัดที่ไฮไลต์ (line_index_at แบบ lead=0): ไฮไลต์เปลี่ยนตามเวลาจริงเท่านั้น ไม่มีวันขึ้นก่อนเสียงร้อง · จอเลื่อนล่วงหน้าได้ตามที่ผู้ใช้ตั้ง"""
+            return scroll_line_index(self._starts, position, lead)
+
         def group_range(self, i: int, gap_s: float) -> tuple[int, int]:
             return group_range(self._rows, i, gap_s)
+
+        def describe_boundary(self, position: float, lead: float) -> dict[str, Any]:
+            """ข้อมูลรอยต่อบรรทัด ณ เวลานี้ (ใช้ล็อกวินิจฉัย: SYNCLYRICS_DEBUG_LINES=1)"""
+            i = find_line_index(self._starts, position)
+            j = scroll_line_index(self._starts, position, lead)
+
+            def line(k: int) -> dict[str, Any] | None:
+                if not (0 <= k < len(self._rows)):
+                    return None
+                r = self._rows[k]
+                ws = [w for w in r["words"] if not w.get("spacer") and not w.get("background")]
+                last = ws[-1] if ws else None
+                return {"i": k, "start": r["start"], "end": r["end"],
+                        "last_word": None if last is None else [last["start"], last["end"], last.get("estimated", False)]}
+            return {"pos": round(position, 3), "lead": lead, "current": line(i), "next": line(i + 1), "scroll_to": j,
+                    "reason": "scroll-ahead" if j > i else "hold"}
 
         def line_count(self) -> int:
             return len(self._rows)

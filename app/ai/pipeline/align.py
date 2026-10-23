@@ -372,11 +372,12 @@ def align_global(bundle: dict[str, Any], vocals16: np.ndarray, line_words: list[
             k += len(ids)
             line.append((grp, grp[0].start * sec, max(grp[-1].end * sec, grp[0].start * sec + 0.04)))
         raw.append(line)
-    _hold_notes(raw, vocals16)
+    fills = _hold_notes(raw, vocals16)
     for li, line in enumerate(raw):
         res: list[tuple[float, float, float] | None] = [
-            None if w is None else Span(w[1], w[2], float(sum(sp.score for sp in w[0]) / len(w[0])), _curve(w[0], 0.0, sec, w[1], w[2]))
-            for w in line]
+            None if w is None else Span(w[1], w[2], float(sum(sp.score for sp in w[0]) / len(w[0])),
+                                        _word_curve(w[0], sec, w[1], w[2], fills.get((li, wi))))
+            for wi, w in enumerate(line)]
         if any(r is not None for r in res):
             out[li] = _fill_gaps(res, next(r[0] for r in res if r), next(r[1] for r in reversed(res) if r))
     return out
@@ -384,17 +385,32 @@ def align_global(bundle: dict[str, Any], vocals16: np.ndarray, line_words: list[
 
 HOLD_TAIL_S = 0.14      # ลากต่อขั้นต่ำเมื่อดูพลังเสียงไม่ได้ (ค่าที่วัดได้ว่า CTC ตัดจบคำเร็วไปโดยเฉลี่ย)
 HOLD_MAX_S = 2.0        # เพดานความยาวคำท้ายบรรทัด (วัดแล้ว 2 วิ ให้ผลเกือบเท่าไม่จำกัด แต่กันช่วงดนตรียาว)
+HOLD_FILL_SLACK_S = 0.25  # คำท้ายบรรทัด: "เติมสีเต็ม" ช้ากว่าที่ CTC บอกจบได้อีกไม่เกิน HOLD_TAIL_S + ค่านี้ (ชดเชย CTC ตัดจบเร็ว) แม้ end ของคำจะถูกต่อไปถึงบรรทัดถัดไป
 
 
-def _hold_notes(raw: list[list[tuple[list[Any], float, float] | None]], vocals16: np.ndarray | None = None) -> None:
+def _word_curve(group: list[Any], sec: float, start: float, end: float, fill_end: float | None) -> list[float] | None:
+    """เส้นโค้งเติมสีของคำ · คำท้ายบรรทัดที่ end ถูกต่อไปไกล (fill_end < end): เติมสีเต็มที่ fill_end แล้วค้างเต็มจนถึง end
+    ไม่งั้นคำสั้นๆ ที่ร้องจบใน 0.3 วิ จะถูกไล่สีช้าๆ ข้ามช่องว่างทั้ง 2 วิ ดูเหมือนยังไม่ได้ร้อง/ค้างก่อนขึ้นบรรทัดถัดไป"""
+    if fill_end is None or fill_end >= end - 1e-6:
+        return _curve(group, 0.0, sec, start, end)
+    fill_end = max(fill_end, start + 0.04)
+    cur = _curve(group, 0.0, sec, start, fill_end)
+    if cur is None:
+        cur = [round(start, 3), 0.0, round(fill_end, 3), 1.0]
+    return cur + [round(end, 3), 1.0]
+
+
+def _hold_notes(raw: list[list[tuple[list[Any], float, float] | None]], vocals16: np.ndarray | None = None) -> dict[tuple[int, int], float]:
     """ยืด "เวลาจบคำ" ให้ต่อเนื่องถึงคำถัดไป (แก้ในที่)
 
     CTC พุ่งขึ้นตอนเจอตัวอักษรแล้วดับทันที จบคำจึงเร็วกว่าที่ร้องจริงราว 0.14 วิ ขณะที่คำหนึ่งยาวเฉลี่ย 0.30 วิ
     เฉลยของมนุษย์ (NetEase YRC) 99% ให้คำจบตรงที่คำถัดไปเริ่มพอดี — เสียงร้องลากค้างถึงคำต่อไป ไม่ได้เงียบ
     """
+    fills: dict[tuple[int, int], float] = {}   # (บรรทัด, คำ) ของคำท้ายบรรทัดที่ end ถูกต่อไกล -> เวลาที่ควรเติมสีเต็ม
     flat = [(li, wi) for li, line in enumerate(raw) for wi, w in enumerate(line) if w is not None]
     for n, (li, wi) in enumerate(flat):
         grp, gs, ge = raw[li][wi]       # type: ignore[misc]
+        raw_ge = ge
         if n + 1 < len(flat):
             nli, nwi = flat[n + 1]
             nxt = raw[nli][nwi][1]      # type: ignore[index]
@@ -406,6 +422,10 @@ def _hold_notes(raw: list[list[tuple[list[Any], float, float] | None]], vocals16
                 ge = max(gs + 0.04, min(ge + HOLD_TAIL_S, nxt))
             else:
                 ge = max(gs + 0.04, min(nxt, gs + HOLD_MAX_S))
+                fill = max(gs + 0.04, raw_ge + HOLD_TAIL_S + HOLD_FILL_SLACK_S)
+                if fill < ge - 1e-6:
+                    fills[(li, wi)] = fill
         else:
             ge = ge + HOLD_TAIL_S
         raw[li][wi] = (grp, gs, ge)
+    return fills

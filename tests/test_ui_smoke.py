@@ -27,7 +27,7 @@ from app.core.events import (
     TRACK_META_READY,
     EventBus,
 )
-from app.core.models import Line, Lyrics, TimingLevel, TrackMeta, TrackRef, Word
+from app.core.models import Line, Lyrics, TimingLevel, TrackMeta, TrackRef, Word, WordTimingSource
 from app.ui.app_window import PLAYER_STATUS, UiContext, build_look, css_color_to_qml
 
 pytestmark = pytest.mark.qt
@@ -360,6 +360,89 @@ def _scenario() -> int:
     sb.deletePreset("ชุดทดสอบ")
     assert list(sb.property("presetNames")) == []
     pump(0.1)
+    assert _bad(messages) == [], _bad(messages)
+
+    # ---------- รอยต่อบรรทัด: ไฮไลต์เปลี่ยนตามเวลาจริง · จอเลื่อนล่วงหน้า · เอฟเฟกต์ค้างจบตามเวลาจบบรรทัด ----------
+    from PySide6.QtCore import QUrl
+    from PySide6.QtQml import QQmlComponent, QQmlExpression
+
+    def seg(start: float, end: float, texts: list[str]) -> Line:
+        step = (end - start) / len(texts)
+        return Line(start=start, end=end, words=[Word(t, start + k * step, start + (k + 1) * step, trailing_space=k < len(texts) - 1,
+                                                       timing=WordTimingSource.ALIGNED) for k, t in enumerate(texts)])
+
+    def crafted(third_start: float = 16.0) -> Lyrics:
+        # บรรทัด 0 ต่อกับบรรทัด 1 (จบ = เริ่มถัดไป) · บรรทัด 1 จบที่ 13.0 แต่บรรทัด 2 เริ่ม 16.0 (ช่องว่าง 3 วิ ไม่ถึงเกณฑ์จุด 3 จุด)
+        return Lyrics(lines=[seg(10.0, 11.5, ["a", "b"]), seg(11.5, 13.0, ["c", "d"]), seg(third_start, third_start + 1.0, ["e", "f"])],
+                      timing=TimingLevel.WORD, source="t")
+
+    comp = QQmlComponent(engine, QUrl.fromLocalFile(str(ROOT / "app" / "ui" / "qml" / "LyricsView.qml")))
+    lv = comp.create()
+    assert lv is not None, [e.toString() for e in comp.errors()]
+    lv.setProperty("width", 600)
+    lv.setProperty("height", 800)
+    refs.model.set_lyrics(crafted())
+    sb.set_from_python("ov_scroll_lead_s", 0.8)
+    sb.set_from_python("ov_word_hold_ms", 250)
+    pump(0.3)
+
+    def at(t: float) -> tuple[int, int]:
+        lv.setProperty("lyricPos", t)
+        pump(0.03)
+        return int(lv.property("currentLine")), int(lv.property("scrollLine"))
+
+    def info(i: int) -> Any:
+        r = QQmlExpression(engine.rootContext(), lv, f"lineInfo({i})").evaluate()[0]
+        return r.toVariant() if hasattr(r, "toVariant") else r
+
+    def boundary_asserts() -> None:
+        assert at(5.0) == (-1, -1)               # ก่อนบรรทัดแรก
+        assert at(9.3) == (-1, 0)                # ใกล้บรรทัดแรก: ไฮไลต์ยังไม่ขึ้น จอเลื่อนล่วงหน้า
+        assert at(10.0) == (0, 0)                # เท่ากับเวลาเริ่ม = ถึงบรรทัดนั้นแล้ว
+        assert at(10.69) == (0, 0)               # ยังอยู่ก่อน (11.5 - 0.8)
+        assert at(10.71) == (0, 1)               # บรรทัดต่อกัน: จอเลื่อนล่วงหน้า แต่ไฮไลต์ยังอยู่บรรทัดเดิม (ไม่ตัดคำท้าย)
+        assert at(11.49) == (0, 1)               # ก่อนเริ่มบรรทัดถัดไปนิดเดียว ยังไฮไลต์บรรทัดเดิม
+        assert at(11.5) == (1, 1)                # ผ่านจุดเริ่ม: ไฮไลต์เปลี่ยนตามเวลาจริงทันที
+        assert at(15.19) == (1, 1)               # ช่องว่าง: ก่อน 16.0 - 0.8 ยังไม่เลื่อน
+        assert at(15.21) == (1, 2)               # ช่องว่าง: จอเลื่อนล่วงหน้า ไฮไลต์ยังบรรทัดเดิม
+        assert at(16.0) == (2, 2)
+        assert at(10.0) == (0, 0)                # seek ย้อนกลับ ไม่ทิ้งสถานะเก่า
+        assert at(5.0) == (-1, -1)
+
+    boundary_asserts()
+    # แอนิเมชันทุกชุด + ลดการเคลื่อนไหว ต้องไม่กระทบการเลือกบรรทัด (รอยต่อเป็นเรื่องของเวลา ไม่ใช่แอนิเมชัน)
+    for preset in ("smooth", "balanced", "bouncy", "snappy", "none"):
+        for reduced in (False, True):
+            sb.set_from_python("ov_anim_preset", preset)
+            sb.set_from_python("ov_reduced_motion", reduced)
+            pump(0.05)
+            boundary_asserts()
+    sb.set_from_python("ov_anim_preset", "smooth")
+    sb.set_from_python("ov_reduced_motion", False)
+    pump(0.05)
+
+    # เอฟเฟกต์ค้าง (ลอย/เรืองแสง) ปล่อยที่ "เวลาจบบรรทัด + ค้างหลังร้องจบ" ไม่ใช่ตอนบรรทัดถัดไปเริ่ม
+    assert at(12.0) == (1, 1)
+    i1 = info(1)
+    assert i1["isCurrent"] is True and i1["lineDone"] is False and abs(i1["sungEnd"] - 13.0) < 1e-6
+    assert at(13.2) == (1, 1) and info(1)["lineDone"] is False       # จบ 13.0 + ค้าง 0.25 = 13.25
+    assert at(13.3) == (1, 1) and info(1)["isCurrent"] is True and info(1)["lineDone"] is True   # ช่องว่าง: ปล่อยก่อนบรรทัดถัดไปเริ่ม
+    assert at(16.0) == (2, 2) and info(2)["lineDone"] is False
+
+    # AI แก้เวลาระหว่างหยุดเพลง: บรรทัดปัจจุบันคำนวณใหม่ทันที (ไม่รอเวลาเดิน) และใช้เวลาใหม่ ไม่ใช่เวลาเก่า
+    assert at(12.0) == (1, 1)
+    refs.model.retime(crafted(third_start=11.9))
+    pump(0.1)
+    assert (int(lv.property("currentLine")), int(lv.property("scrollLine"))) == (2, 2), "retime ต้องทำให้ index คำนวณใหม่"
+    refs.model.retime(crafted(third_start=16.0))
+    pump(0.1)
+    assert (int(lv.property("currentLine")), int(lv.property("scrollLine"))) == (1, 1)
+    # เปลี่ยนเพลง (ล้างโมเดล) ขณะอยู่รอยต่อ: ไม่ค้างค่าเก่า
+    refs.model.clear()
+    pump(0.1)
+    assert (int(lv.property("currentLine")), int(lv.property("scrollLine"))) == (-1, -1)
+    lv.deleteLater()
+    pump(0.05)
     assert _bad(messages) == [], _bad(messages)
 
     # ปิดโปรแกรมต้องไม่ถูกหน้าตั้งค่าขวาง (เคยค้าง: หน้าต่างที่ซ่อนลงถาดปฏิเสธการปิด)

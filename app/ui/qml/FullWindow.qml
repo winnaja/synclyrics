@@ -245,8 +245,17 @@ Window {
     readonly property bool chromeHidden: cfg.fw_idle_hide && idle && !settingsOpen
     HoverHandler {
         id: wake
-        cursorShape: win.fs && win.chromeHidden ? Qt.BlankCursor : Qt.ArrowCursor
-        onPointChanged: { win.idle = false; idleTimer.restart() }
+        cursorShape: win.chromeHidden ? Qt.BlankCursor : Qt.ArrowCursor
+        // ขยับเมาส์จริงเท่านั้นถึงนับ: เนื้อเพลงที่เลื่อนอยู่ใต้เมาส์ที่นิ่งทำให้ Qt ส่ง hover ซ้ำตำแหน่งเดิม ซึ่งเดิมรีเซ็ตเวลานับจนไม่เคยซ่อน
+        property real lx: -1
+        property real ly: -1
+        onPointChanged: {
+            var p = point.position
+            if (Math.abs(p.x - lx) < 1.5 && Math.abs(p.y - ly) < 1.5) return
+            lx = p.x; ly = p.y
+            win.idle = false
+            idleTimer.restart()
+        }
     }
     Timer {
         id: idleTimer

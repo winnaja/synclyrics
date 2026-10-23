@@ -194,18 +194,26 @@ Item {
             function startFade() {
                 if (!fadePending || img.status !== Image.Ready) return
                 fadePending = false
+                failsafe.stop()
                 if (cfg.ov_reduced_motion) { oldFx.opacity = 0; return }
                 oldFade.restart()
             }
+            // กันปกเก่าค้างบนจอ: ถ้าปกใหม่ไม่พร้อม/ไม่มีปก ภายใน 1.5 วิ ให้ล้างปกเก่าทิ้งเสมอ
+            Timer { id: failsafe; interval: 1500; onTriggered: { cover.fadePending = false; oldFade.stop(); oldFx.opacity = 0 } }
             Connections {
                 target: player
                 function onCoverUrlChanged() {
-                    if (cover.lastUrl.length > 0 && img.status === Image.Ready && player.coverUrl.toString() !== cover.lastUrl) {
+                    var nu = player.coverUrl.toString()
+                    oldFade.stop()
+                    oldFx.opacity = 0
+                    if (cover.lastUrl.length > 0 && nu.length > 0 && nu !== cover.lastUrl) {
                         oldImg.source = cover.lastUrl
                         oldFx.opacity = 1
                         cover.fadePending = true
+                        failsafe.restart()
+                        cover.startFade()
                     }
-                    cover.lastUrl = player.coverUrl.toString()
+                    cover.lastUrl = nu
                 }
             }
             Connections { target: img; function onStatusChanged() { cover.startFade() } }

@@ -117,6 +117,9 @@ _DEFAULT_PALETTE = ["#2a2f3d", "#343947", "#232733", "#2e3340"]
 _LANG_NAMES = {"th": "ไทย", "en": "อังกฤษ", "zh": "จีน", "ja": "ญี่ปุ่น", "ko": "เกาหลี"}
 
 
+_DEBUG_LINES = os.environ.get("SYNCLYRICS_DEBUG_LINES", "") not in ("", "0")
+
+
 def make_bridge_classes() -> tuple[type, type]:
     """สร้างคลาส PlayerBridge และ ClockBridge ครั้งเดียวแล้วจำไว้ (import PySide6 แบบ lazy)"""
     global _BRIDGES
@@ -560,6 +563,23 @@ def make_bridge_classes() -> tuple[type, type]:
         def lineIndexAt(self, position: float) -> int:
             """index ของบรรทัดปัจจุบัน (bisect) -1 = ยังไม่ถึงบรรทัดแรก"""
             return int(self._model.line_index_at(position))
+
+        @Slot(float, float, result=int)
+        def scrollIndexAt(self, position: float, lead: float) -> int:
+            """บรรทัดที่จอควรเลื่อนไปหา (ล่วงหน้า lead วินาทีเสมอ) — แยกจากบรรทัดที่ไฮไลต์ (lineIndexAt) ที่เปลี่ยนตามเวลาจริงเท่านั้น"""
+            return int(self._model.scroll_index_at(position, lead))
+
+        @Slot(float, float, int, int)
+        def debugLineChange(self, position: float, lead: float, current: int, scroll: int) -> None:
+            """วินิจฉัยรอยต่อบรรทัด: เปิดด้วย SYNCLYRICS_DEBUG_LINES=1 · เรียกเฉพาะตอนบรรทัดเปลี่ยน (ไม่ใช่ทุกเฟรม)"""
+            if not _DEBUG_LINES:
+                return
+            try:
+                info = self._model.describe_boundary(position, lead)
+                info["qml_current"], info["qml_scroll"] = current, scroll
+                _log.info("รอยต่อบรรทัด", extra={"data": info})
+            except Exception:
+                pass
 
         @Slot(float, float, result=int)
         def lineIndexAtLead(self, position: float, lead: float) -> int:
