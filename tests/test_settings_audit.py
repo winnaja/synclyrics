@@ -1,4 +1,4 @@
-"""ตรวจหน้าตั้งค่าแบบไม่ต้องเปิด GUI: ทุกคีย์ที่ SettingsWindow.qml ผูกไว้ต้องมีอยู่จริงใน SettingsStore
+"""ตรวจหน้าตั้งค่าแบบไม่ต้องเปิด GUI: ทุกคีย์ที่ SettingsView.qml ผูกไว้ต้องมีอยู่จริงใน SettingsStore
 มีค่าเริ่มต้น รับ/ปฏิเสธค่าตามช่วง คืนค่าเริ่มต้นรายตัวได้ และมีผู้ใช้ค่านั้นจริง (QML หรือ Python อื่น) — กัน "ตัวเลือกที่ปรับได้แต่ไม่มีผล"
 """
 
@@ -16,7 +16,7 @@ from app.ui.settings_store import SettingsStore
 
 ROOT = Path(__file__).resolve().parent.parent
 QML_DIR = ROOT / "app" / "ui" / "qml"
-SETTINGS_QML = (QML_DIR / "SettingsWindow.qml").read_text(encoding="utf-8")
+SETTINGS_QML = (QML_DIR / "SettingsView.qml").read_text(encoding="utf-8")
 DYNAMIC = ("ov_w_", "ov_h_")                       # คีย์ขนาดหน้าต่างตามโหมดปัจจุบัน ("ov_w_" + cfg.ov_mode)
 META = {"ov_theme", "ov_anim_preset"}              # ตั้งค่าชุดค่าอื่นผ่าน SettingsStore (ไม่มีผู้อ่านตรงๆ)
 DYNAMIC_CONSUMERS = ("hk_", "ls_src_")             # อ่านด้วย getattr แบบวนลูป (hotkeys / lyrics service)
@@ -28,7 +28,7 @@ def _sources() -> dict[str, str]:
     out: dict[str, str] = {}
     for path in glob.glob(str(ROOT / "app" / "**" / "*.qml"), recursive=True) + glob.glob(str(ROOT / "app" / "**" / "*.py"), recursive=True):
         base = os.path.basename(path)
-        if base in {"SettingsWindow.qml", "settings_store.py", "settings_presets.py", "config.py"}:
+        if base in {"SettingsView.qml", "settings_store.py", "settings_presets.py", "config.py"}:
             continue
         out[path] = Path(path).read_text(encoding="utf-8")
     return out
@@ -85,7 +85,7 @@ def test_invalid_values_are_rejected_without_changing_state():
 
 def test_line_spacing_slider_range_is_accepted():
     store = SettingsStore(Settings())
-    lo, hi = 0.8, 2.5                            # ช่วงของ slider ใน SettingsWindow.qml
+    lo, hi = 0.8, 2.5                            # ช่วงของ slider ใน SettingsView.qml
     assert f'key: "ov_line_spacing"; from: {lo}; to: {hi}' in SETTINGS_QML
     store.set("ov_line_spacing", lo)
     store.set("ov_line_spacing", hi)
@@ -93,5 +93,5 @@ def test_line_spacing_slider_range_is_accepted():
 
 def test_search_and_navigation_hooks_present_in_qml():
     # โครงค้นหา: จับคู่ชื่อ/คำอธิบาย/คีย์/หมวด · กดหัวข้อผลค้นหาไปหมวดนั้น · มีปุ่มล้าง · ตัวอย่างสดย่อได้
-    for needle in ("function hit(", "win.hit(label", "function gotoPage(", "head.crumb", "previewCompact", "Keys.onEscapePressed"):
+    for needle in ("function hit(", "win.hit(label", "function gotoPage(", "head.crumb", "previewOpen", "function handleEscape(", "signal backRequested", "objectName: \"settingsBackButton\""):
         assert needle in SETTINGS_QML, needle

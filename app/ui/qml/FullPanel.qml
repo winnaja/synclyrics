@@ -51,13 +51,17 @@ Item {
             Behavior on opacity { NumberAnimation { duration: 120 } }
         }
         Icon {
+            id: ico
             anchors.centerIn: parent
             kind: ib.kind
             size: ib.iconSize
             color: root.colText
             scale: tap.pressed ? 0.9 : 1.0
-            Behavior on scale { NumberAnimation { duration: 90 } }
+            Behavior on scale { enabled: !pop.running; NumberAnimation { duration: 90 } }
+            // เปลี่ยนไอคอน (เล่น <-> หยุด) แล้วเด้งเข้าเบาๆ ให้รู้ว่าสถานะเปลี่ยนจริง
+            NumberAnimation { id: pop; target: ico; property: "scale"; from: 0.78; to: 1.0; duration: 240; easing.type: Easing.OutBack; easing.overshoot: 1.6 }
         }
+        onKindChanged: if (!cfg.ov_reduced_motion) pop.restart()
         HoverHandler { id: hov }
         TapHandler { id: tap; onTapped: ib.clicked() }
         Keys.onSpacePressed: ib.clicked()
@@ -80,15 +84,25 @@ Item {
             id: rail
             anchors.verticalCenter: parent.verticalCenter
             width: parent.width
-            height: tr.hot ? 8 : 4
+            height: tr.hot ? 7 : 5
             radius: height / 2
-            color: Qt.alpha(root.colText, 0.28)
+            color: Qt.alpha(root.colText, 0.25)
             Behavior on height { NumberAnimation { duration: 120 } }
             Rectangle {
                 width: parent.width * Math.max(0, Math.min(1, tr.value))
                 height: parent.height
                 radius: parent.radius
                 color: root.colText
+            }
+            Rectangle {                      // ปุ่มกลมโผล่ตอนชี้/ลาก
+                width: 14; height: 14; radius: 7
+                color: root.colText
+                x: rail.width * Math.max(0, Math.min(1, tr.value)) - width / 2
+                y: (rail.height - height) / 2
+                opacity: tr.hot ? 1 : 0
+                scale: tr.hot ? 1 : 0.4
+                Behavior on opacity { NumberAnimation { duration: 120 } }
+                Behavior on scale { NumberAnimation { duration: 140; easing.type: Easing.OutBack } }
             }
         }
         MouseArea {
@@ -161,6 +175,41 @@ Item {
                 property vector2d imgSize: Qt.vector2d(img.implicitWidth, img.implicitHeight)
                 fragmentShader: "../shaders/rounded_image.frag.qsb"
             }
+            // ครอสเฟดปกเก่า -> ปกใหม่ตอนเปลี่ยนเพลง: เก็บปกเก่าไว้ด้านบนแล้วจางหาย เมื่อปกใหม่โหลดเสร็จ
+            property string lastUrl: ""
+            property bool fadePending: false
+            Image { id: oldImg; anchors.fill: parent; fillMode: Image.Stretch; asynchronous: false; visible: false }
+            ShaderEffect {
+                id: oldFx
+                anchors.fill: parent
+                opacity: 0
+                visible: opacity > 0.01
+                property variant source: oldImg
+                property real radius: cover.corner
+                property vector2d size: Qt.vector2d(width, height)
+                property vector2d imgSize: Qt.vector2d(oldImg.implicitWidth, oldImg.implicitHeight)
+                fragmentShader: "../shaders/rounded_image.frag.qsb"
+            }
+            NumberAnimation { id: oldFade; target: oldFx; property: "opacity"; from: 1; to: 0; duration: 520; easing.type: Easing.InOutQuad }
+            function startFade() {
+                if (!fadePending || img.status !== Image.Ready) return
+                fadePending = false
+                if (cfg.ov_reduced_motion) { oldFx.opacity = 0; return }
+                oldFade.restart()
+            }
+            Connections {
+                target: player
+                function onCoverUrlChanged() {
+                    if (cover.lastUrl.length > 0 && img.status === Image.Ready && player.coverUrl.toString() !== cover.lastUrl) {
+                        oldImg.source = cover.lastUrl
+                        oldFx.opacity = 1
+                        cover.fadePending = true
+                    }
+                    cover.lastUrl = player.coverUrl.toString()
+                }
+            }
+            Connections { target: img; function onStatusChanged() { cover.startFade() } }
+            Component.onCompleted: lastUrl = player.coverUrl.toString()
             // ย่อลงเล็กน้อยตอนหยุดเพลง (Apple Music)
             scale: player.playing || cfg.ov_reduced_motion ? 1.0 : 0.94
             Behavior on scale { NumberAnimation { duration: 380; easing.type: Easing.OutCubic } }
@@ -172,6 +221,8 @@ Item {
             y: cover.height + 26
             width: parent.width
             spacing: 3
+            NumberAnimation { id: infoIn; target: info; property: "opacity"; from: 0; to: 1; duration: 360; easing.type: Easing.OutCubic }
+            Connections { target: player; function onTitleChanged() { if (!cfg.ov_reduced_motion) infoIn.restart() } }
             Text {
                 width: parent.width
                 text: player.title.length > 0 ? player.title : "ยังไม่มีเพลง"
@@ -210,6 +261,7 @@ Item {
                 text: root.fmt(root.scrub >= 0 ? root.scrub * player.durationS : root.pos)
                 color: root.colSecondary
                 font.pixelSize: 12
+                font.weight: Font.Medium
                 font.family: cfg.look_font_family
             }
             Text {
@@ -227,10 +279,11 @@ Item {
             id: transport
             y: timeBar.y + timeBar.height + 10
             x: (parent.width - width) / 2
-            spacing: 22
-            IconBtn { kind: "prev"; iconSize: 32; hit: 56; tip: "เพลงก่อนหน้า (P)"; onClicked: player.skipPrev() }
-            IconBtn { kind: player.playing ? "pause" : "play"; iconSize: 46; hit: 72; tip: player.playing ? "หยุด (Space)" : "เล่น (Space)"; onClicked: player.togglePause() }
-            IconBtn { kind: "next"; iconSize: 32; hit: 56; tip: "เพลงถัดไป (N)"; onClicked: player.skipNext() }
+            spacing: 36
+            anchors.verticalCenter: undefined
+            IconBtn { kind: "prev"; iconSize: 40; hit: 64; anchors.verticalCenter: parent.verticalCenter; tip: "เพลงก่อนหน้า (P)"; onClicked: player.skipPrev() }
+            IconBtn { kind: player.playing ? "pause" : "play"; iconSize: 56; hit: 76; tip: player.playing ? "หยุด (Space)" : "เล่น (Space)"; onClicked: player.togglePause() }
+            IconBtn { kind: "next"; iconSize: 40; hit: 64; anchors.verticalCenter: parent.verticalCenter; tip: "เพลงถัดไป (N)"; onClicked: player.skipNext() }
         }
 
         // ---------- วอลลุ่ม (ลำโพงสองข้าง แบบ Apple Music) ----------

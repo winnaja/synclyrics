@@ -45,6 +45,7 @@ Item {
     property bool pastFilled: true
     property real edgeBlur: 0   // เบลอสูงสุดที่ขอบบน/ล่าง (ใช้คู่กับ edgeFade)
     property real edgeFade: 0   // สัดส่วนความสูงที่เนื้อเพลงจางหายที่ขอบบน/ล่าง (0 = ตัดแข็ง)
+    property real anchorFrac: 0.5   // ตำแหน่งแนวตั้งของบรรทัดปัจจุบัน (0.5 = กลาง · Apple Music ≈ 0.4)
     property real topInset: 0   // เว้นด้านบน (เช่นแถบควบคุม) ไม่ให้บรรทัดปัจจุบันชนขอบ
 
     // ไม่ใช้สปริง: ผู้ใช้เลือกลดการเคลื่อนไหว หรือแอนิเมชันแบบ fade ล้วน (เปลี่ยนบรรทัดแล้วกระโดดไปเลย ไม่เลื่อน)
@@ -89,7 +90,7 @@ Item {
         var b = list.itemAtIndex(last)
         if (!a || !b)
             return NaN
-        return (a.y + b.y + b.height) / 2 - list.height / 2
+        return (a.y + b.y + b.height) / 2 - list.height * root.anchorFrac
     }
 
     // ใช้ตรวจ/ไล่บั๊ก: ระยะ (px) ที่บรรทัดปัจจุบัน/ท่อนปัจจุบันอยู่ห่างจากกลางจอ (0 = กลางพอดี) · NaN = ไม่มีบรรทัดปัจจุบัน
@@ -222,8 +223,8 @@ Item {
         // สร้างทุกบรรทัดล่วงหน้า (เนื้อเพลงยาวสุดไม่กี่ร้อยบรรทัด) เพื่อให้ความสูงจริงรู้ครบ: positionViewAtIndex จึงเลื่อนไปกลางจอได้แม่นหลัง seek ไกลๆ
         cacheBuffer: 100000
         boundsBehavior: Flickable.StopAtBounds
-        topMargin: height / 2
-        bottomMargin: height / 2
+        topMargin: height * root.anchorFrac
+        bottomMargin: height * (1 - root.anchorFrac)
         spacing: 2
         // โหมด minimal ไม่ให้เลื่อนเองด้วยล้อเมาส์ (มีบรรทัดเดียวที่เห็น)
         interactive: !root.minimalMode

@@ -11,7 +11,28 @@ Window {
     id: win
     objectName: "fullWindow"
 
-    signal settingsRequested()
+    signal placeRequested(string name)
+    signal installRequested()
+    signal quitRequested()
+    signal hiddenToTray()
+
+    // หน้าตั้งค่าอยู่ในหน้าต่างหลักนี้ (ซ้อนทับเครื่องเล่นที่ยังเล่นต่อข้างใต้) — ไม่เปิดหน้าต่างแยก
+    property bool settingsOpen: false
+    property bool settingsFromFloating: false     // เปิดตั้งค่าตอนใช้หน้าต่างลอยอยู่ → กลับแล้วปิดหน้าต่างหลัก คืนสถานะเดิม
+    property alias settingsView: settingsView
+    function openSettings() {
+        settingsFromFloating = !cfg.fw_open
+        cfg.fw_open = true
+        settingsOpen = true
+        raise()
+        requestActivate()
+    }
+    function closeSettings() {
+        settingsOpen = false
+        if (settingsFromFloating) { cfg.fw_fullscreen = false; cfg.fw_open = false }
+        settingsFromFloating = false
+    }
+    Connections { target: cfg; function onFw_openChanged() { if (!cfg.fw_open) { win.settingsOpen = false; win.settingsFromFloating = false } } }
 
     // เวลาของเพลง (วินาที) + เวลาแอนิเมชันพื้นหลัง อัปเดตจาก FrameAnimation เดียว
     property real pos: 0
@@ -33,8 +54,11 @@ Window {
         if (settingsBridge.quitting) return
         if (!cfg.st_close_to_tray) { settingsBridge.quit(); return }   // ผู้ใช้เลือกให้ปุ่มปิด = ปิดโปรแกรม
         close.accepted = false
+        settingsOpen = false
+        settingsFromFloating = false
         cfg.fw_fullscreen = false
         cfg.fw_open = false
+        win.hiddenToTray()
     }
     // สถานะที่ผู้ใช้เปลี่ยนเองผ่านระบบ (ปุ่มขยายของ Windows) ให้ cfg ตามเสมอ
     onVisibilityChanged: () => {
@@ -117,6 +141,24 @@ Window {
         Behavior on c3 { ColorAnimation { duration: 900 } }
         fragmentShader: "../shaders/fluid.frag.qsb"
     }
+    // ม่านเข้มบางๆ ให้เนื้อเพลงอ่านออกเสมอ: ปกสว่าง/สีอ่อน = ม่านเข้มขึ้น (ค่อยๆ เปลี่ยนตามเพลง) · ขอบล่างเข้มขึ้นนิดให้ปุ่มชัด
+    readonly property color pal0: player.palette[0]
+    readonly property color pal1: player.palette[1]
+    readonly property color pal2: player.palette[2]
+    readonly property real palLum: {
+        var a = [pal0, pal1, pal2], l = 0
+        for (var i = 0; i < 3; ++i) l += 0.2126 * a[i].r + 0.7152 * a[i].g + 0.0722 * a[i].b
+        return l / 3
+    }
+    Rectangle {
+        anchors.fill: parent
+        visible: cfg.fw_background === "fluid"
+        gradient: Gradient {
+            GradientStop { position: 0.0; color: Qt.rgba(0, 0, 0, Math.max(0.03, Math.min(0.45, (win.palLum - 0.3) * 1.1))) }
+            GradientStop { position: 1.0; color: Qt.rgba(0, 0, 0, Math.max(0.1, Math.min(0.55, (win.palLum - 0.22) * 1.2))) }
+        }
+        Behavior on opacity { NumberAnimation { duration: 900 } }
+    }
     Rectangle {
         anchors.fill: parent
         visible: cfg.fw_background === "solid"
@@ -181,6 +223,7 @@ Window {
             // ตัวอักษรตามความสูงหน้าต่าง (740px ≈ 36px, เต็มจอ 1080p ≈ 53px) × ตัวคูณของผู้ใช้
             sizeScale: Math.max(0.6, win.height / 740 * 0.95) * cfg.fw_font_scale
             forceAlign: cfg.fw_align
+            anchorFrac: 0.42
             minimalMode: false
             colText: cfg.fw_text_color
             colInactive: Qt.alpha(cfg.fw_inactive_color, 0.40)   // คำที่ยังไม่ร้องในบรรทัดปัจจุบัน ~40% (วัดจากคลิป Apple Music)
@@ -199,7 +242,7 @@ Window {
     }
 
     // ---------- ซ่อนปุ่ม/ป้าย/เมาส์เมื่อไม่ขยับ (ตั้งเวลาได้: cfg.fw_idle_hide_s) ----------
-    readonly property bool chromeHidden: cfg.fw_idle_hide && idle
+    readonly property bool chromeHidden: cfg.fw_idle_hide && idle && !settingsOpen
     HoverHandler {
         id: wake
         cursorShape: win.fs && win.chromeHidden ? Qt.BlankCursor : Qt.ArrowCursor
@@ -221,16 +264,20 @@ Window {
         property bool active: false
         signal clicked()
         activeFocusOnTab: true
-        width: 38
-        height: 38
+        width: 40
+        height: 40
         Rectangle {
             anchors.fill: parent
+            anchors.margins: 3
             radius: width / 2
             color: "#FFFFFF"
-            opacity: tap.pressed ? 0.3 : (bh.hovered || btn.activeFocus ? 0.2 : (btn.active ? 0.22 : 0.0))
-            Behavior on opacity { NumberAnimation { duration: 120 } }
+            opacity: tap.pressed ? 0.28 : (btn.active ? 0.2 : (bh.hovered || btn.activeFocus ? 0.12 : 0.0))
+            Behavior on opacity { NumberAnimation { duration: 140 } }
         }
-        Icon { anchors.centerIn: parent; kind: btn.kind; size: 20; color: "#FFFFFF"; opacity: bh.hovered ? 1.0 : 0.85 }
+        Icon { anchors.centerIn: parent; kind: btn.kind; size: 20; color: "#FFFFFF"; opacity: btn.active || bh.hovered ? 1.0 : 0.72
+            scale: tap.pressed ? 0.9 : 1.0
+            Behavior on opacity { NumberAnimation { duration: 140 } }
+            Behavior on scale { NumberAnimation { duration: 100 } } }
         HoverHandler { id: bh }
         TapHandler { id: tap; onTapped: btn.clicked() }
         Keys.onSpacePressed: btn.clicked()
@@ -240,13 +287,28 @@ Window {
         ToolTip.delay: 500
     }
 
-    Row {
-        id: topBar
+    // แถบปุ่มมุมขวาบนเป็นแคปซูลโปร่งฝ้าเดียว (ไม่ใช่ปุ่มลอยเรียงกัน) · ปุ่มที่เปิดอยู่สว่างเต็ม ที่เหลือจางลง
+    Rectangle {
+        id: topCap
         anchors.top: parent.top
         anchors.right: parent.right
-        anchors.topMargin: 14
-        anchors.rightMargin: win.fs ? 28 : 18
-        spacing: 4
+        anchors.topMargin: 12
+        anchors.rightMargin: win.fs ? 28 : 16
+        width: topBar.width + 12
+        height: 46
+        radius: 23
+        color: Qt.rgba(1, 1, 1, 0.10)
+        z: 4
+        opacity: win.chromeHidden ? 0 : 1
+        visible: opacity > 0.01
+        Behavior on opacity { NumberAnimation { duration: 260 } }
+    }
+    Row {
+        id: topBar
+        anchors.verticalCenter: topCap.verticalCenter
+        anchors.right: topCap.right
+        anchors.rightMargin: 6
+        spacing: 0
         z: 5
         opacity: win.chromeHidden ? 0 : 1
         visible: opacity > 0.01
@@ -254,26 +316,44 @@ Window {
         BarBtn { visible: player.hasTranslation; kind: "translate"; active: player.showTranslation; tip: "แสดง/ซ่อนคำแปล (T)"; onClicked: player.toggleTranslation() }
         BarBtn { kind: "swap"; tip: "เปลี่ยนเนื้อเพลงตัวอื่น"; onClicked: player.nextCandidate() }
         BarBtn { kind: "lyrics"; active: win.lyricsOn; tip: win.lyricsOn ? "ซ่อนเนื้อเพลง (ดูแต่ปก)" : "แสดงเนื้อเพลง"; onClicked: cfg.fw_lyrics_visible = !cfg.fw_lyrics_visible }
-        BarBtn { kind: "settings"; tip: "ตั้งค่า"; onClicked: win.settingsRequested() }
+        BarBtn { kind: "settings"; tip: "ตั้งค่า"; onClicked: win.openSettings() }
         BarBtn { kind: win.fs ? "fullscreen_exit" : "fullscreen"; tip: win.fs ? "ออกจากเต็มจอ (Esc)" : "เต็มจอ (F)"; onClicked: cfg.fw_fullscreen = !cfg.fw_fullscreen }
         BarBtn { kind: "close"; tip: cfg.st_close_to_tray ? "ปิดหน้าต่างโหมดเต็ม (โปรแกรมยังทำงานที่ถาดระบบ)" : "ปิดโปรแกรม"; onClicked: win.close() }
     }
 
     // ---------- คีย์ลัด (เมื่อหน้าต่างนี้ถูกโฟกัส) ----------
-    Shortcut { sequences: ["F", "F11"]; onActivated: cfg.fw_fullscreen = !cfg.fw_fullscreen }
-    Shortcut { sequence: "Escape"; enabled: win.fs; onActivated: cfg.fw_fullscreen = false }
-    Shortcut { sequence: "Space"; onActivated: player.togglePause() }
-    Shortcut { sequence: "Left"; onActivated: player.seek(Math.max(0, win.pos - 5)) }
-    Shortcut { sequence: "Right"; onActivated: player.seek(win.pos + 5) }
-    Shortcut { sequence: "N"; onActivated: player.skipNext() }
-    Shortcut { sequence: "P"; onActivated: player.skipPrev() }
-    Shortcut { sequence: "["; onActivated: player.adjustOffset(-0.1) }
-    Shortcut { sequence: "]"; onActivated: player.adjustOffset(0.1) }
-    Shortcut { sequences: ["+", "="]; onActivated: cfg.fw_font_scale = Math.min(2.0, cfg.fw_font_scale + 0.1) }
-    Shortcut { sequence: "-"; onActivated: cfg.fw_font_scale = Math.max(0.5, cfg.fw_font_scale - 0.1) }
-    Shortcut { sequence: "T"; onActivated: player.toggleTranslation() }
-    Shortcut { sequence: "L"; onActivated: cfg.fw_lyrics_visible = !cfg.fw_lyrics_visible }
-    Shortcut { sequence: "Up"; onActivated: player.setVolume(Math.min(1, player.volume + 0.05)) }
-    Shortcut { sequence: "Down"; onActivated: player.setVolume(Math.max(0, player.volume - 0.05)) }
-    Shortcut { sequence: "M"; onActivated: player.toggleMute() }
+    // ตอนอยู่หน้าตั้งค่า ปิดคีย์ลัดตัวอักษรของเครื่องเล่นทั้งหมด (พิมพ์ค้นหา/ตั้งชื่อชุดได้โดยไม่สั่งเล่น-หยุดโดยบังเอิญ) เหลือ F11 กับ Esc
+    readonly property bool playerKeys: !settingsOpen
+    Shortcut { sequence: "F11"; onActivated: cfg.fw_fullscreen = !cfg.fw_fullscreen }
+    Shortcut { sequence: "F"; enabled: win.playerKeys; onActivated: cfg.fw_fullscreen = !cfg.fw_fullscreen }
+    // Esc: อยู่หน้าตั้งค่า = ล้างคำค้น/กลับหน้าเล่นเพลง · ไม่งั้นออกจากเต็มจอ
+    Shortcut { sequence: "Escape"; enabled: win.settingsOpen || win.fs
+        onActivated: { if (win.settingsOpen) settingsView.handleEscape(); else cfg.fw_fullscreen = false } }
+    Shortcut { sequence: "Space"; enabled: win.playerKeys; onActivated: player.togglePause() }
+    Shortcut { sequence: "Left"; enabled: win.playerKeys; onActivated: player.seek(Math.max(0, win.pos - 5)) }
+    Shortcut { sequence: "Right"; enabled: win.playerKeys; onActivated: player.seek(win.pos + 5) }
+    Shortcut { sequence: "N"; enabled: win.playerKeys; onActivated: player.skipNext() }
+    Shortcut { sequence: "P"; enabled: win.playerKeys; onActivated: player.skipPrev() }
+    Shortcut { sequence: "["; enabled: win.playerKeys; onActivated: player.adjustOffset(-0.1) }
+    Shortcut { sequence: "]"; enabled: win.playerKeys; onActivated: player.adjustOffset(0.1) }
+    Shortcut { sequences: ["+", "="]; enabled: win.playerKeys; onActivated: cfg.fw_font_scale = Math.min(2.0, cfg.fw_font_scale + 0.1) }
+    Shortcut { sequence: "-"; enabled: win.playerKeys; onActivated: cfg.fw_font_scale = Math.max(0.5, cfg.fw_font_scale - 0.1) }
+    Shortcut { sequence: "T"; enabled: win.playerKeys; onActivated: player.toggleTranslation() }
+    Shortcut { sequence: "L"; enabled: win.playerKeys; onActivated: cfg.fw_lyrics_visible = !cfg.fw_lyrics_visible }
+    Shortcut { sequence: "Up"; enabled: win.playerKeys; onActivated: player.setVolume(Math.min(1, player.volume + 0.05)) }
+    Shortcut { sequence: "Down"; enabled: win.playerKeys; onActivated: player.setVolume(Math.max(0, player.volume - 0.05)) }
+    Shortcut { sequence: "M"; enabled: win.playerKeys; onActivated: player.toggleMute() }
+
+    // ---------- หน้าตั้งค่า (ซ้อนทับเครื่องเล่น เปลี่ยนด้วยการจางเข้า-ออก) ----------
+    SettingsView {
+        id: settingsView
+        anchors.fill: parent
+        z: 50
+        shown: win.settingsOpen
+        onBackRequested: win.closeSettings()
+        onFloatingRequested: { win.settingsOpen = false; win.settingsFromFloating = false; cfg.fw_fullscreen = false; cfg.fw_open = false }
+        onPlaceRequested: (name) => win.placeRequested(name)
+        onInstallRequested: win.installRequested()
+        onQuitRequested: win.quitRequested()
+    }
 }

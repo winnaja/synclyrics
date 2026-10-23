@@ -228,9 +228,23 @@ def _scenario() -> int:
     assert overlay.property("visible") is False
     sb.set_from_python("ov_visible", True)
     from PySide6.QtCore import QMetaObject
+    was_full_open = sb.cfg.value("fw_open")
     QMetaObject.invokeMethod(root, "showSettings")
-    pump(0.3)
-    assert settings_win.property("visible") is True
+    pump(0.4)
+    # หน้าตั้งค่าอยู่ในหน้าต่างหลัก (FullWindow) เดียวกัน — ไม่มีหน้าต่างระดับบนแยก
+    assert settings_win.property("shown") is True and settings_win.property("visible") is True
+    assert full_win.property("settingsOpen") is True and full_win.property("visible") is True
+    from PySide6.QtGui import QGuiApplication
+    assert not [w for w in QGuiApplication.allWindows() if w.objectName() == "settingsWindow"]
+    assert settings_win.parent() is not None
+    # กลับหน้าเล่นเพลง: หน้าตั้งค่าหาย เครื่องเล่นยังอยู่ (เปิดตั้งค่าจากหน้าต่างลอย = กลับแล้วคืนสถานะเดิม)
+    QMetaObject.invokeMethod(full_win, "closeSettings")
+    pump(0.4)
+    assert settings_win.property("shown") is False and full_win.property("settingsOpen") is False
+    assert sb.cfg.value("fw_open") == was_full_open
+    QMetaObject.invokeMethod(root, "showSettings")     # เปิดใหม่ + ค่าที่ตั้งไว้ยังอยู่
+    pump(0.4)
+    assert settings_win.property("shown") is True
     p.resetOffset()
     p.refreshLyrics()
     p.searchLyrics("NewJeans - OMG")
@@ -320,6 +334,8 @@ def _scenario() -> int:
     pump(0.1)
     assert sb.isDefault("ov_anim_speed", sb.cfg.value("ov_anim_speed")) is False
     from PySide6.QtCore import QObject
+    QMetaObject.invokeMethod(root, "showSettings")   # เปิดหน้าตั้งค่า (ฝังในหน้าต่างหลัก) อีกครั้ง
+    pump(0.4)
     settings_win.setProperty("page", 6)       # หมวดแอนิเมชัน + โหมดละเอียด (ความเร็วเป็นตัวเลือกขั้นสูง)
     settings_win.setProperty("advanced", True)
     pump(0.3)
@@ -350,10 +366,10 @@ def _scenario() -> int:
     assert sb.property("quitting") is False
     sb.quit()
     assert sb.property("quitting") is True
-    for w in (settings_win, overlay, full_win):
+    for w in (overlay, full_win):
         w.close()
     pump(0.1)
-    assert settings_win.property("visible") is False
+    assert full_win.property("visible") is False        # ปิดโปรแกรม = หน้าต่างหลัก (ที่มีหน้าตั้งค่าอยู่ข้างใน) ปิดตาม
     refs.adapter.close()
     return 0
 

@@ -173,7 +173,9 @@ class SettingsStore:
             return ov("highlight", "auto_scroll", "resume_s", "click_seek", "show_source", "show_translation", "translation_size") + ["look_show_romanization"]
         if page == "anim":
             return sorted(set(anim_presets.OWNED_KEYS) | set(ov("anim_preset", "animation", "animation_intensity", "reduced_motion", "word_anim", "word_ease",
-                          "scroll_lead_s", "word_anim_ms", "word_scale", "word_stay", "glow_strength", "glow_color", "word_hold_ms", "word_release_ms", "lift_px", "emph_on", "emph_min_s", "emph_glow", "emph_scale")))
+                          "word_anim_ms", "word_scale", "word_stay", "glow_strength", "glow_color", "word_hold_ms", "word_release_ms", "lift_px", "emph_on", "emph_min_s", "emph_glow", "emph_scale")))
+        if page == "sync":
+            return ov("latency_ms", "scroll_lead_s")
         if page == "hotkeys":
             return [k for k in flat if k.startswith("hk_")]
         if page == "sources":
@@ -215,8 +217,8 @@ class SettingsStore:
 
     # ---------- ชุดการตั้งค่าที่ตั้งชื่อไว้ ----------
     # หมวดที่เข้าชุด = หน้าตา/พฤติกรรมของเนื้อเพลง · ไม่รวมการเริ่มต้นระบบ (เปิดพร้อม Windows ฯลฯ) คีย์ลัด และสถานะหน้าต่าง (ตำแหน่ง/เปิด/จอ)
-    PRESET_PAGES = ("full", "float", "font", "theme", "lyrics", "anim")
-    PRESET_EXCLUDE = frozenset({"ov_visible", "ov_monitor", "fw_maximized"})
+    PRESET_PAGES = ("full", "float", "font", "theme", "lyrics", "anim", "sync")
+    PRESET_EXCLUDE = frozenset({"ov_visible", "ov_monitor", "fw_maximized", "ov_latency_ms"})   # ความหน่วงเสียงเป็นค่าของลำโพง/บลูทูธ ไม่ใช่หน้าตา
 
     def preset_keys(self) -> list[str]:
         flat = self.flat()

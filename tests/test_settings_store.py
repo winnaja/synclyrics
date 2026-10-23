@@ -186,7 +186,7 @@ def test_every_settings_row_key_in_qml_exists_in_store():
 
     store, _ = make()
     flat = store.flat()
-    qml = (Path(__file__).resolve().parent.parent / "app" / "ui" / "qml" / "SettingsWindow.qml").read_text(encoding="utf-8")
+    qml = (Path(__file__).resolve().parent.parent / "app" / "ui" / "qml" / "SettingsView.qml").read_text(encoding="utf-8")
     keys = set(re.findall(r'key: "((?:ov|fw|look|hk|st)_[a-z_0-9]+)"', qml))
     missing = [k for k in keys if k not in flat and not k.startswith(("ov_w_", "ov_h_"))]
     assert not missing, missing
