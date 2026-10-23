@@ -77,7 +77,8 @@ Item {
     // คลื่น: บรรทัดไกลจากบรรทัดปัจจุบันเริ่มเปลี่ยนช้ากว่าเล็กน้อย (ms ต่อบรรทัด สูงสุด 4 บรรทัด)
     readonly property int waveDelay: still ? 0 : Math.round(cfg.ov_wave_ms * Math.min(distance, 4))
 
-    implicitHeight: body.implicitHeight * cfg.ov_line_spacing + 2 * pad + gapHeight
+    // ระยะห่างบรรทัด = ช่องว่างเพิ่มตามขนาดตัวอักษร (ไม่คูณความสูงทั้งบรรทัด) — บรรทัดที่ตัดขึ้นแถวใหม่/มีคำแปลจึงไม่ทำให้ช่องว่างบวมตาม
+    implicitHeight: Math.max(body.implicitHeight * 0.8, body.implicitHeight + (cfg.ov_line_spacing - 1) * baseSize * 1.2) + 2 * pad + gapHeight
     height: implicitHeight
 
     // โหมด minimal เห็นแค่บรรทัดปัจจุบัน · ที่เหลือจางลงตามระยะห่าง (ปรับความไวที่ cfg.ov_falloff)

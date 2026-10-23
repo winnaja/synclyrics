@@ -41,8 +41,39 @@ Window {
     readonly property color line: "#2c2e3d"
     readonly property color accent: "#A5B4FC"
     property bool advanced: false     // แสดงตัวเลือกขั้นสูง
+    // ตัวอย่างสดย่อเหลือแถบเตี้ยๆ เมื่อเลื่อนลง (ไม่กินที่อ่านการตั้งค่า) · hysteresis กันสลับไปมาตอนความสูงของรายการเปลี่ยน
+    property bool previewPinned: false          // true = ผู้ใช้กดขยายค้างไว้
+    property bool previewCompact: false
+    Connections {
+        target: scroller
+        function onContentYChanged() {
+            if (win.previewPinned) win.previewCompact = false
+            else if (scroller.contentY > 90) win.previewCompact = true
+            else if (scroller.contentY < 4) win.previewCompact = false
+        }
+    }
+    onPageChanged: { previewCompact = false; previewPinned = false }
     property string query: ""         // ค้นหา: ไม่ว่าง = แสดงทุกหมวดที่มีแถวตรงกับคำค้น
     readonly property string q: query.trim().toLowerCase()
+    // ค้นหาหลายคำ (คั่นด้วยเว้นวรรค): ต้องเจอครบทุกคำในข้อความรวมของแถว (ชื่อ คำอธิบาย คีย์ หมวด)
+    function hit(text) {
+        if (q.length === 0) return true
+        var t = text.toLowerCase(), terms = q.split(/\s+/)
+        for (var i = 0; i < terms.length; ++i)
+            if (terms[i].length > 0 && t.indexOf(terms[i]) < 0) return false
+        return true
+    }
+    function pageOf(item) {                       // index ของหมวด (pages) ที่ item อยู่ · -1 = ไม่พบ
+        for (var p = item ? item.parent : null; p; p = p.parent)
+            if (p.pgIdx !== undefined) return p.pgIdx
+        return -1
+    }
+    function cardOf(item) {
+        for (var p = item ? item.parent : null; p; p = p.parent)
+            if (p.isCard === true) return p
+        return null
+    }
+    function gotoPage(idx) { query = ""; searchBox.text = ""; page = idx; scroller.contentY = 0 }
 
     // ================= ตัวควบคุมพื้นฐาน =================
     // การ์ด: หัวข้อ + แถวบางๆ คั่นด้วยเส้นจาง ซ่อนตัวเองเมื่อไม่มีแถวที่มองเห็น (ตอนค้นหา/ปิดขั้นสูง)
@@ -51,6 +82,8 @@ Window {
         property string title: ""
         property string note: ""
         default property alias rows: col.data
+        readonly property bool isCard: true
+        readonly property int pageIdx: win.pageOf(cd)
         width: parent ? parent.width : 400
         clip: true
         // ไม่ใช้ visible ของการ์ดเอง: visible ของลูกเป็นค่าที่ขึ้นกับพ่อ จะวนค้างอยู่ที่ false ตลอด
@@ -63,14 +96,17 @@ Window {
         height: any ? head.height + body.height + 22 : 0
         Text {
             id: head
-            visible: cd.title.length > 0
-            text: cd.title
-            color: win.fg2
+            readonly property bool crumb: win.q.length > 0 && cd.pageIdx >= 0
+            visible: cd.title.length > 0 || crumb
+            text: crumb ? win.pages[cd.pageIdx].t + (cd.title.length > 0 ? "  ›  " + cd.title : "") : cd.title
+            color: crumb ? win.accent : win.fg2
             font.pixelSize: 12; font.weight: Font.DemiBold; font.family: cfg.look_font_family
             font.letterSpacing: 0.6
             leftPadding: 4
             height: visible ? 26 : 0
             verticalAlignment: Text.AlignTop
+            TapHandler { enabled: head.crumb; onTapped: win.gotoPage(cd.pageIdx) }   // กดหัวข้อผลค้นหา = ไปหมวดนั้น
+            HoverHandler { enabled: head.crumb; cursorShape: Qt.PointingHandCursor }
         }
         Rectangle {
             id: body
@@ -114,7 +150,10 @@ Window {
         property bool wide: false                // true = ตัวควบคุมกว้างเต็มแถวใต้ป้าย (สี/ตัวอย่าง)
         property string resetKey: ""             // คีย์ที่ปุ่ม ↺ จะคืนค่า (ว่าง = หาเองจากตัวควบคุมตัวแรกที่มี key)
         default property alias content: slot.data
-        readonly property bool matches: win.q.length === 0 || (label + " " + hint).toLowerCase().indexOf(win.q) >= 0
+        readonly property var cardItem: win.cardOf(r2)
+        readonly property bool matches: win.q.length === 0
+            || win.hit(label + " " + hint + " " + rkey + " " + (cardItem ? cardItem.title : "")
+                       + " " + (cardItem && cardItem.pageIdx >= 0 ? win.pages[cardItem.pageIdx].t : ""))
         readonly property bool want: (!adv || win.advanced || win.q.length > 0) && matches
         readonly property string ctlKey: {
             var kids = slot.children
@@ -132,6 +171,7 @@ Window {
         width: parent ? parent.width : 400
         height: want ? (wide ? labels.height + slot.childrenRect.height + 30 : Math.max(54, Math.max(labels.height, slot.childrenRect.height) + 24)) : 0
         Rectangle { visible: r2.want; anchors.bottom: parent.bottom; x: 16; width: parent.width - 32; height: 1; color: win.line; opacity: 0.7 }
+        Rectangle { visible: r2.want && win.q.length > 0 && r2.label.length > 0; x: 0; y: 10; width: 3; height: parent.height - 20; radius: 1.5; color: win.accent }   // ไฮไลต์แถวที่ตรงกับคำค้น
         Rectangle {                              // ปุ่มคืนค่าเริ่มต้นของตัวเลือกนี้
             id: rb
             objectName: "resetKeyButton"
@@ -308,6 +348,7 @@ Window {
     // ตัวอย่างสด: เนื้อเพลง 3 บรรทัด บรรทัดกลางเติมสีวนซ้ำ — เห็นผลของสี/ตัวอักษร/แอนิเมชันคำทันทีโดยไม่ต้องรอเพลง
     component Preview: Rectangle {
         id: pv
+        property bool compact: false
         width: parent ? parent.width : 400
         height: 170
         radius: 14
@@ -321,13 +362,13 @@ Window {
         property real t: 0
         readonly property var words: ["Girl,", "let's", "put", "some", "miles", "on it"]
         Timer { interval: 33; repeat: true; running: pv.visible && win.visible; onTriggered: pv.t = (pv.t + 0.033) % 5.4 }
-        readonly property real sz: Math.min(34, cfg.ov_font_size * 0.8)
+        readonly property real sz: Math.min(compact ? 26 : 34, cfg.ov_font_size * 0.8)
         readonly property real sampleScale: 1.0
         Column {
             anchors.centerIn: parent
             width: parent.width - 40
             spacing: 6
-            Text { width: parent.width; text: "Jump in the Cadillac"; color: cfg.ov_inactive_color; opacity: 0.55
+            Text { visible: !pv.compact; width: parent.width; text: "Jump in the Cadillac"; color: cfg.ov_inactive_color; opacity: 0.55
                 font.pixelSize: pv.sz * 0.86; font.weight: cfg.ov_font_weight; font.family: cfg.look_font_family
                 horizontalAlignment: cfg.ov_align === "center" ? Text.AlignHCenter : (cfg.ov_align === "right" ? Text.AlignRight : Text.AlignLeft) }
             Item {
@@ -369,7 +410,7 @@ Window {
                     }
                 }
             }
-            Text { width: parent.width; text: "Our love is still spinning"; color: cfg.ov_inactive_color; opacity: 0.4
+            Text { visible: !pv.compact; width: parent.width; text: "Our love is still spinning"; color: cfg.ov_inactive_color; opacity: 0.4
                 font.pixelSize: pv.sz * 0.86; font.weight: cfg.ov_font_weight; font.family: cfg.look_font_family
                 horizontalAlignment: cfg.ov_align === "center" ? Text.AlignHCenter : (cfg.ov_align === "right" ? Text.AlignRight : Text.AlignLeft) }
         }
@@ -468,7 +509,16 @@ Window {
                 leftPadding: 14; selectByMouse: true
                 text: win.query
                 onTextChanged: win.query = text
+                rightPadding: 30
                 background: Rectangle { radius: 17; color: win.field; border.width: searchBox.activeFocus ? 1 : 0; border.color: win.accent }
+                Text {
+                    visible: searchBox.text.length > 0
+                    anchors.right: parent.right; anchors.rightMargin: 12; anchors.verticalCenter: parent.verticalCenter
+                    text: "✕"; color: win.fg2; font.pixelSize: 13
+                    TapHandler { onTapped: { searchBox.text = ""; searchBox.forceActiveFocus() } }
+                    HoverHandler { cursorShape: Qt.PointingHandCursor }
+                }
+                Keys.onEscapePressed: text = ""
             }
         }
     }
@@ -479,8 +529,11 @@ Window {
         x: nav.width + 28
         y: top.y + top.height + 6
         width: parent.width - nav.width - 56
-        height: visible ? 150 : 0
+        compact: win.previewCompact
+        height: visible ? (compact ? 76 : 150) : 0
+        Behavior on height { NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }
         visible: win.q.length === 0 && (win.page === 3 || win.page === 6 || win.page === 9)
+        TapHandler { onTapped: win.previewPinned = !win.previewPinned }   // กดตัวอย่างเพื่อขยาย/ย่อเอง
     }
 
     Flickable {
@@ -502,13 +555,13 @@ Window {
 
             Text {
                 visible: win.q.length > 0 && pageCol.height < 60
-                text: "ไม่พบการตั้งค่าที่ตรงกับ \"" + win.query + "\" (ลองเปิด \"ตัวเลือกขั้นสูง\")"
+                text: "ไม่พบการตั้งค่าที่ตรงกับ \"" + win.query + "\" — ลองคำอื่น (ค้นได้จากชื่อ คำอธิบาย ชื่อหมวด หรือชื่อคีย์ เช่น font, blur)"
                 color: win.fg2; font.pixelSize: 13; font.family: cfg.look_font_family
             }
 
             // ---------------- ตั้งค่าด่วน ----------------
             Column {
-                visible: win.show(9); width: parent.width; spacing: 6
+                property int pgIdx: 9; visible: win.show(9); width: parent.width; spacing: 6
                 Intro { text: "ตัวเลือกที่ใช้บ่อยรวมไว้ที่เดียว เห็นผลที่ตัวอย่างด้านบนทันที · อยากปรับละเอียดกว่านี้ไปที่หมวดอื่นทางซ้าย (เปิด \"โหมดละเอียด\" ที่มุมขวาบนเพื่อดูตัวเลือกทั้งหมด)" }
                 Card { title: "หน้าตา"
                     Row2 { label: "ธีม"; hint: "สีพื้นหลังและความโปร่งใสโดยรวม"; wide: true
@@ -551,7 +604,7 @@ Window {
 
             // ---------------- แหล่งเนื้อเพลง ----------------
             Column {
-                visible: win.show(10); width: parent.width; spacing: 6
+                property int pgIdx: 10; visible: win.show(10); width: parent.width; spacing: 6
                 Intro { text: "แอปค้นเนื้อเพลงจากหลายแหล่งพร้อมกัน แล้วเทียบกันเอง — ฉบับที่ตรงกับแหล่งอื่นมากที่สุดจะถูกเลือกก่อน (ถ้าไม่ถูกใจกด \"ตัวอื่น\" ได้) · AI ใช้จัดเวลาให้ตรงกับเสียงเท่านั้น ไม่แก้ข้อความ" }
                 Card { title: "แหล่งที่ใช้ค้น"
                     note: "ปิดทุกแหล่ง = ไม่ค้นเว็บเลย (ใช้ AI ถอดเสียงเป็นเนื้อเพลงอย่างเดียว) · แหล่งที่มีเวลาทีละคำ (NetEase/QQ) ให้ไฮไลต์ละเอียดกว่า"
@@ -580,7 +633,7 @@ Window {
             // ---------------- ทั่วไป ----------------
                 Intro { text: "" }
             Column {
-                visible: win.show(0); width: parent.width; spacing: 6
+                property int pgIdx: 0; visible: win.show(0); width: parent.width; spacing: 6
                 Intro { text: "ตั้งค่าพื้นฐานของโปรแกรม: การเปิดตอนเริ่มเครื่อง และปุ่มปิดหน้าต่าง · ทุกตัวเลือกที่ปรับแล้วจะมีปุ่ม ↺ ข้างๆ กดเพื่อคืนค่าเริ่มต้นเฉพาะข้อนั้น" }
                 Card { title: "ชุดการตั้งค่าที่บันทึกไว้"
                     note: "บันทึกหน้าตาและพฤติกรรมของเนื้อเพลงทั้งหมด (โหมดเต็ม หน้าต่างลอย ตัวอักษร ธีม เนื้อเพลง แอนิเมชัน) เป็นชื่อๆ แล้วสลับกลับมาใช้ได้ทันที · ไม่รวมคีย์ลัด การเริ่มต้นระบบ และตำแหน่งหน้าต่าง"
@@ -652,7 +705,7 @@ Window {
 
             // ---------------- โหมดเต็ม ----------------
             Column {
-                visible: win.show(1); width: parent.width; spacing: 6
+                property int pgIdx: 1; visible: win.show(1); width: parent.width; spacing: 6
                 Intro { text: "หน้าต่างเต็มแบบ Apple Music: ปรับการจัดวาง ขนาดปก เสียง และการซ่อนปุ่มเมื่อเมาส์นิ่ง" }
                 Card { title: "หน้าต่าง"
                     Row2 { label: "เปิดโหมดเต็ม"; hint: "หน้าต่างปกติ ย่อ/ขยาย/ปิดได้ · กด F หรือ F11 เพื่อเต็มจอ · Esc ออก"
@@ -694,7 +747,7 @@ Window {
 
             // ---------------- หน้าต่างลอย ----------------
             Column {
-                visible: win.show(2); width: parent.width; spacing: 6
+                property int pgIdx: 2; visible: win.show(2); width: parent.width; spacing: 6
                 Intro { text: "หน้าต่างเนื้อเพลงเล็กที่ลอยอยู่บนจอ (ใช้ตอนไม่ได้เปิดโหมดเต็ม): ตำแหน่ง ขนาด และการล็อก" }
                 Card { title: "การแสดงผล"
                     Row2 { label: "แสดงหน้าต่างเนื้อเพลงลอย"; hint: "เห็นเมื่อไม่ได้เปิดโหมดเต็ม"; SSwitch { key: "ov_visible" } }
@@ -752,7 +805,7 @@ Window {
 
             // ---------------- ตัวอักษร ----------------
             Column {
-                visible: win.show(3); width: parent.width; spacing: 6
+                property int pgIdx: 3; visible: win.show(3); width: parent.width; spacing: 6
                 Intro { text: "หน้าตาตัวอักษรของเนื้อเพลง: ดูผลที่ตัวอย่างด้านบนได้ทันที" }
                 Card { title: "ฟอนต์และขนาด"
                     Row2 { label: "ฟอนต์"; hint: "ฟอนต์หลัก SF Thonburi (ไม่มี = ใช้ตัวสำรองให้เอง)"; resetKey: "look_font_family"
@@ -786,7 +839,7 @@ Window {
 
             // ---------------- พื้นหลังและธีม ----------------
             Column {
-                visible: win.show(4); width: parent.width; spacing: 6
+                property int pgIdx: 4; visible: win.show(4); width: parent.width; spacing: 6
                 Intro { text: "สีและความโปร่งใสของหน้าต่างเนื้อเพลงลอย (โหมดเต็มใช้สีจากปกเพลงอัตโนมัติ)" }
                 Card { title: "ธีม"
                     Row2 { label: "ธีมสำเร็จรูป"; hint: "แก้สีเองเมื่อไหร่จะกลายเป็น \"กำหนดเอง\""; wide: true
@@ -808,7 +861,7 @@ Window {
 
             // ---------------- เนื้อเพลง ----------------
             Column {
-                visible: win.show(5); width: parent.width; spacing: 6
+                property int pgIdx: 5; visible: win.show(5); width: parent.width; spacing: 6
                 Intro { text: "วิธีอ่านเนื้อเพลง: ไฮไลต์ การเลื่อน การคลิกกรอ และคำแปล" }
                 Card { title: "การอ่าน"
                     Row2 { label: "รูปแบบไฮไลต์"; hint: "ถ้าเพลงมีเวลาแค่ระดับบรรทัด ระบบจะประมาณเวลาทีละคำ (ยังไม่ใช่เวลาจริง)"; wide: true
@@ -829,7 +882,7 @@ Window {
 
             // ---------------- แอนิเมชัน ----------------
             Column {
-                visible: win.show(6); width: parent.width; spacing: 6
+                property int pgIdx: 6; visible: win.show(6); width: parent.width; spacing: 6
                 Intro { text: "การเคลื่อนไหวของเนื้อเพลง: เริ่มจากเลือกชุดสำเร็จรูป แล้วค่อยปรับต่อ · เปิดโหมดละเอียดที่มุมขวาบนเพื่อดูตัวเลือกเพิ่ม · ผลเห็นที่ตัวอย่างด้านบน" }
                 Card { title: "ชุดสำเร็จรูป"
                     Row2 { label: "ชุดแอนิเมชัน"; hint: "เลือกชุดแล้วปรับต่อเองได้ (ปรับเมื่อไหร่ชุดจะเป็น \"กำหนดเอง\")"; wide: true
@@ -884,7 +937,7 @@ Window {
 
             // ---------------- การซิงก์ ----------------
             Column {
-                visible: win.show(7); width: parent.width; spacing: 6
+                property int pgIdx: 7; visible: win.show(7); width: parent.width; spacing: 6
                 Intro { text: "สถานะการเชื่อมต่อ YouTube และการปรับเวลา/ค้นหาเนื้อเพลงของเพลงที่เล่นอยู่" }
                 Card { title: "สถานะ"
                     Row2 { label: "การเชื่อมต่อ YouTube"
@@ -934,7 +987,7 @@ Window {
 
             // ---------------- คีย์ลัด ----------------
             Column {
-                visible: win.show(8); width: parent.width; spacing: 6
+                property int pgIdx: 8; visible: win.show(8); width: parent.width; spacing: 6
                 Text { width: parent.width; wrapMode: Text.Wrap; color: win.fg2; font.pixelSize: 12; font.family: cfg.look_font_family
                     visible: win.q.length === 0
                     text: "รูปแบบ Ctrl+Alt+L (ใช้ Ctrl, Alt, Shift, Win + ตัวอักษร/ตัวเลข/F1-F12/ลูกศร) · ว่าง = ปิดคีย์ลัดนั้น · ใช้ได้แม้ไม่ได้โฟกัสโปรแกรม" }
