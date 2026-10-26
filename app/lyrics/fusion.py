@@ -27,7 +27,7 @@ from app.lyrics.timing_estimate import estimate_line
 if TYPE_CHECKING:
     from app.core.models import Line, TrackMeta
 
-FUSION_VERSION = 1          # เปลี่ยนเมื่อวิธีรวมเปลี่ยน -> cache เดิมถือว่าหมดอายุ
+FUSION_VERSION = 2          # เปลี่ยนเมื่อวิธีรวมเปลี่ยน -> cache เดิมถือว่าหมดอายุ
 SOURCE_NAME = "fusion"
 
 MIN_VOTERS = 2              # น้อยกว่านี้ไม่มีอะไรให้เทียบ = ไม่ต้องรวม
