@@ -303,3 +303,43 @@ async def test_next_candidate_walks_past_rejected_fusion_to_other_versions(db_pa
         seen.append(nxt.chosen.source)
     assert len(set(seen)) == 4, f"ต้องผ่านครบ 4 ฉบับ (fusion + 3 แหล่ง) ก่อนวนกลับ: {seen}"
     assert seen[0] == seen[4], "ครบรอบแล้วต้องกลับมาที่ฉบับแรก"
+
+
+async def test_stale_wrong_song_in_cache_is_not_shown(db_path) -> None:
+    """เนื้อคนละเพลง (ศิลปินอื่น ความยาวต่าง 101 วิ) ที่เคยถูกบันทึกไว้ใน cache ต้องไม่ถูกแสดงต่อ
+
+    ผู้ใช้รายงาน 2026-10-26: เพลง EVERYTHING ของ The Black Skirts ขึ้นเนื้ออังกฤษของเพลงอื่นจาก LRCLIB
+    ป้ายเขียนว่า 'ความยาวต่างจากวิดีโอ 101 วิ' คือระบบรู้ว่าผิดแต่ cache ใช้ซ้ำโดยไม่ให้คะแนนใหม่
+    """
+    import json
+    import time
+
+    track = TrackRef(video_id="vidwrong0001", title="EVERYTHING", channel="The Black Skirts", duration=202.0)
+    wrong = _fusable("lrclib", ["First you'll see me on the news,", "Then never again", "I'm rolling in my grave",
+                                 "Regret regret", "more words here", "and more words"])
+    wrong.title, wrong.artist, wrong.duration = "Everything", "Some Other Artist", 101.0
+    svc = LyricsService(db_path, sources={}, client=object())
+    svc._upsert_track(track, None)
+    conn = svc._db()
+    # จำลองผลที่ถูกบันทึกไว้ตอนก่อนมีเกณฑ์ตรวจ: คะแนนสูงทั้งที่เป็นคนละเพลง
+    conn.execute("INSERT INTO lyrics(video_id, source, source_id, timing, language, score, payload, fetched_at) "
+                 "VALUES(?,?,?,?,?,?,?,?)",
+                 (track.video_id, wrong.source, wrong.source_id, wrong.timing.value, None, 85.0,
+                  json.dumps(wrong.to_dict(), ensure_ascii=False), time.time()))
+    res = await svc.find(track, 202.0)
+    assert res.chosen is None, "ฉบับคนละเพลงต้องไม่ถูกแสดงแม้ cache จะจำคะแนนเก่าไว้สูง"
+
+
+async def test_next_candidate_never_walks_into_low_score_candidates(db_path) -> None:
+    """'ลองตัวถัดไป' ต้องไม่ลงไปหาฉบับที่คะแนนต่ำกว่าเกณฑ์รับ (มักเป็นเพลงอื่น)"""
+    srcs = _three_sources()
+    srcs["junk"] = make_source("junk", result=_fusable("junk", ["zulu yankee xray"] * 6),
+                               title="Totally Different Song", artist="Nobody")
+    svc = LyricsService(db_path, sources=srcs, client=object())
+    first = await svc.find(TRACK, 200.0)
+    seen = {first.chosen.source}
+    for _ in range(6):
+        nxt = await svc.next_candidate(TRACK.video_id)
+        if nxt.chosen is not None:
+            seen.add(nxt.chosen.source)
+    assert "junk" not in seen, f"ไม่ควรเดินไปถึงฉบับคนละเพลง: {seen}"

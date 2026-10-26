@@ -261,8 +261,17 @@ class LyricsService:
 
         cached, choice_id = await asyncio.to_thread(self._load_cached, track.video_id)
         if cached:
+            # ให้คะแนน cache ใหม่ด้วยเกณฑ์ปัจจุบัน (ชื่อ/ศิลปิน/ความยาวของเพลงที่เล่นอยู่ตอนนี้) — ผลที่บันทึกไว้ตอนก่อนมีเกณฑ์
+            # ตรวจภาษา/ความยาวจะได้ไม่ถูกใช้ต่อ · ไม่ต้องค้นเน็ตใหม่ (ใช้ชื่อที่ตัวเองบันทึกไว้ในแต่ละฉบับ)
+            for _, c in cached:
+                if c.lyrics.source not in ("manual", fusion.SOURCE_NAME):
+                    stored = c.score
+                    scoring.score_candidate(c, meta, duration)
+                    c.score_detail["stored_score"] = stored
             cands = [c for _, c in cached]
             pick = next((c for i, c in cached if i == choice_id), None)
+            if pick is not None and pick.lyrics.source != "manual" and pick.score < scoring.MIN_ACCEPT_SCORE:
+                pick = None        # ฉบับที่เคยถูกเลือกไว้ แต่คะแนนต่ำกว่าเกณฑ์ (เช่นเลือกตอนระบบยังไม่ตรวจภาษา/ความยาว) ไม่ใช้ซ้ำ
             # ผู้ใช้เลือกฉบับเองไว้ = เคารพการเลือกนั้น ไม่เอา fusion ไปทับ
             # ไม่ได้เลือก: ใช้ cache ได้เฉพาะเมื่อมีฉบับ fusion ของเวอร์ชันปัจจุบันอยู่แล้ว
             # (cache ที่มีแต่เนื้อดิบจากเว็บ หรือ fusion เวอร์ชันเก่า ต้องไม่จบแค่นี้ ไม่งั้นข้าม fusion ไปตลอดกาล)
@@ -349,7 +358,9 @@ class LyricsService:
     def _next_candidate_sync(self, video_id: str) -> LyricsResult:
         cached, choice_id = self._load_cached(video_id)
         duration = self._track_duration(video_id)
-        usable = [(i, c) for i, c in cached if c.score > 0]
+        # เดินเฉพาะฉบับที่ผ่านเกณฑ์รับเหมือนตอนค้นหา: ฉบับคะแนน 0-40 ถูกเก็บไว้ใน cache แต่มักเป็นเพลงอื่น
+        # (เดิมกรองแค่ > 0 และ pick ข้ามเกณฑ์ใน _present ทำให้ "ลองตัวถัดไป" ลงไปหาเนื้อคนละเพลงได้)
+        usable = [(i, c) for i, c in cached if c.score >= scoring.MIN_ACCEPT_SCORE]
         if not usable:
             return self._present([], duration, None)
         if choice_id is None:
