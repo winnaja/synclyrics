@@ -134,6 +134,29 @@ class LyricsService:
         r = self._db().execute("SELECT title, artist FROM tracks WHERE video_id=?", (video_id,)).fetchone()
         return (r["title"], r["artist"]) if r and r["title"] and r["artist"] is not None else None
 
+    @staticmethod
+    def _apply_stored_names(meta: TrackMeta, stored: tuple[str, str] | None) -> TrackMeta:
+        """ใช้ชื่อที่เคยบันทึกไว้ เฉพาะกรณีเป็นการ 'สลับลำดับเพลง/ศิลปิน' ของชื่อวิดีโอนี้จริง
+
+        ชื่อใน DB มาจากเครื่องเดาล้วนๆ (ไม่มีทางให้ผู้ใช้แก้) ถ้าเชื่อทุกค่า ชื่อที่ตัวแยกรุ่นเก่าเดาผิดจะติดตลอดไป
+        แล้วเนื้อเพลงคนละเพลงที่ 'ตรงกับชื่อผิด' ก็จะผ่านเกณฑ์ทุกครั้ง
+        """
+        if not stored or (stored[0], stored[1]) == (meta.title, meta.artist):
+            return meta
+        sw = swap_meta(meta)
+        if (stored[0], stored[1]) == (sw.title, sw.artist):
+            return sw
+        return meta
+
+    def _meta_from_db(self, video_id: str) -> TrackMeta | None:
+        r = self._db().execute("SELECT yt_title, channel, duration_s FROM tracks WHERE video_id=?",
+                               (video_id,)).fetchone()
+        if not r:
+            return None
+        meta = parse_track(TrackRef(video_id=video_id, title=r["yt_title"] or "", channel=r["channel"] or "",
+                                    duration=r["duration_s"]))
+        return self._apply_stored_names(meta, self._stored_names(video_id))
+
     def _save_names(self, video_id: str, meta: TrackMeta) -> None:
         self._db().execute("UPDATE tracks SET title=?, artist=? WHERE video_id=?", (meta.title, meta.artist, video_id))
 
@@ -255,9 +278,7 @@ class LyricsService:
         duration = duration or track.duration
         meta = parse_track(track)
         await asyncio.to_thread(self._upsert_track, track, meta)
-        stored = await asyncio.to_thread(self._stored_names, track.video_id)
-        if stored and (stored[0], stored[1]) != (meta.title, meta.artist):
-            meta = dataclasses.replace(meta, title=stored[0], artist=stored[1])  # ใช้ชื่อที่เคยยืนยัน/แก้ไว้
+        meta = self._apply_stored_names(meta, await asyncio.to_thread(self._stored_names, track.video_id))
 
         cached, choice_id = await asyncio.to_thread(self._load_cached, track.video_id)
         if cached:
@@ -364,6 +385,12 @@ class LyricsService:
         duration = self._track_duration(video_id)
         # เดินเฉพาะฉบับที่ผ่านเกณฑ์รับเหมือนตอนค้นหา: ฉบับคะแนน 0-40 ถูกเก็บไว้ใน cache แต่มักเป็นเพลงอื่น
         # (เดิมกรองแค่ > 0 และ pick ข้ามเกณฑ์ใน _present ทำให้ "ลองตัวถัดไป" ลงไปหาเนื้อคนละเพลงได้)
+        # คะแนนที่เก็บไว้มาจากเกณฑ์ตอนค้นหา (อาจเป็นรุ่นเก่า) ให้คะแนนใหม่ตามเพลงที่เล่นอยู่ก่อนกรอง
+        meta = self._meta_from_db(video_id)
+        if meta is not None:
+            for _, c in cached:
+                if c.lyrics.source not in ("manual", fusion.SOURCE_NAME) and c.matched_title:
+                    scoring.score_candidate(c, meta, duration)
         usable = [(i, c) for i, c in cached if c.score >= scoring.MIN_ACCEPT_SCORE]
         if not usable:
             return self._present([], duration, None)

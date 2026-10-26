@@ -333,8 +333,9 @@ async def test_stale_wrong_song_in_cache_is_not_shown(db_path) -> None:
 async def test_next_candidate_never_walks_into_low_score_candidates(db_path) -> None:
     """'ลองตัวถัดไป' ต้องไม่ลงไปหาฉบับที่คะแนนต่ำกว่าเกณฑ์รับ (มักเป็นเพลงอื่น)"""
     srcs = _three_sources()
-    srcs["junk"] = make_source("junk", result=_fusable("junk", ["zulu yankee xray"] * 6),
-                               title="Totally Different Song", artist="Nobody")
+    junk = _fusable("junk", ["zulu yankee xray"] * 6)
+    junk.title, junk.artist = "Totally Different Song", "Nobody"     # cache เก็บชื่อจาก Lyrics เอง
+    srcs["junk"] = make_source("junk", result=junk, title="Totally Different Song", artist="Nobody")
     svc = LyricsService(db_path, sources=srcs, client=object())
     first = await svc.find(TRACK, 200.0)
     seen = {first.chosen.source}
@@ -343,3 +344,13 @@ async def test_next_candidate_never_walks_into_low_score_candidates(db_path) -> 
         if nxt.chosen is not None:
             seen.add(nxt.chosen.source)
     assert "junk" not in seen, f"ไม่ควรเดินไปถึงฉบับคนละเพลง: {seen}"
+
+
+def test_stored_names_only_apply_when_they_are_a_swap_of_the_current_parse() -> None:
+    """ชื่อใน DB ที่ตัวแยกรุ่นเก่าเดาผิด (เช่น Regret / Everything Everything) ต้องไม่ทับชื่อจากวิดีโอ"""
+    from app.lyrics.title_parser import parse_track, swap_meta
+
+    meta = parse_track(TrackRef(video_id="v1", title="EVERYTHING", channel="The Black Skirts", duration=202.0))
+    assert LyricsService._apply_stored_names(meta, ("Regret", "Everything Everything")) is meta
+    sw = swap_meta(meta)
+    assert LyricsService._apply_stored_names(meta, (sw.title, sw.artist)) == sw
