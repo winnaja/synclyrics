@@ -118,6 +118,7 @@ def snap_words_to_voice(words: list[list[float]], vocals: Any, sample_rate: int 
 ONSET_DIP_REL_DB = 22.0    # ช่วง "ขาดเสียง" = ต่ำกว่าระดับปกติ (เปอร์เซ็นไทล์ 90) ลบเท่านี้
 ONSET_ON_REL_DB = 20.0     # เสียงร้องกลับมาดังอีกครั้ง = สูงกว่าระดับปกติ ลบเท่านี้
 ONSET_MIN_DIP_S = 0.15
+MID_WORD_KEEP_IF_VOICED = True    # False = พฤติกรรมเดิม (ใช้เทียบในสคริปต์วัด)
 ONSET_LOOKAHEAD_S = 0.5    # เผื่อให้เสียงเริ่มช้ากว่าที่ Whisper บอกได้ไม่เกินเท่านี้หลังคำจบ
 
 
@@ -201,7 +202,10 @@ def snap_line_onset(words: list[list[float]], vocals: Any, sample_rate: int = 16
         # คำ 날엔 ที่ร้องจบไปแล้วเพิ่งขึ้นสีตอนบรรทัดถัดไปจะเริ่ม — เกือบทุกเพลง)
         look = ONSET_LOOKAHEAD_S if idx < len(out) - 1 or idx == 0 else 0.0
         i1 = min(len(db), int((e + look) / SNAP_FRAME_S))
-        if i1 - i0 >= 3 and (idx == 0 or e - s >= 0.6):
+        # คำกลางบรรทัดที่ "เริ่มตอนมีเสียงร้องอยู่แล้ว" ไม่ต้องหาจุดเริ่มใหม่: dip กลางคำยาวคือพักหายใจ/โน้ตลากที่เบาลงชั่วขณะ
+        # ไม่ใช่ช่วงเงียบที่ Whisper ลากคำคลุมมา (เคสจริง: 'me' ที่ลากโน้ต 3 วิ ถูกเลื่อนไปเริ่มตอนคำถัดไปเริ่ม)
+        voiced_start = MID_WORD_KEEP_IF_VOICED and idx > 0 and bool(np.any(db[i0:i0 + 5] >= on_thr))
+        if i1 - i0 >= 3 and (idx == 0 or e - s >= 0.6) and not voiced_start:
             best = _last_dip_onset(db, i0, i1, dip_thr, on_thr, first_len if idx == 0 else mid_len, first=idx == 0)
             if best is not None:
                 t = best * SNAP_FRAME_S

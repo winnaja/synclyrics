@@ -483,10 +483,15 @@ class Worker:
                 from app.ai.pipeline.vocal_activity import classify_backing
                 from app.ai.pipeline.vocal_activity import compact_line_outliers, remap_curves, snap_line_onset, snap_words_to_voice
 
+                # เวลาจาก CTC ทั้งเพลง (ฟังเสียงร้องตรงๆ) แม่นกว่าเดิมอยู่แล้ว: วัดกับเฉลยรายคำ (scripts/eval_snap.py) พบว่า snap_line_onset
+                # ทำให้เวลาเริ่มคำคลาดขึ้นทุกตำแหน่ง (คำท้ายบรรทัด 83.6%→74.6% ภายใน 0.15 วิ — คำท้ายบรรทัด/คำลากโน้ตขึ้นสีช้า)
+                # จึงใช้กับเส้นทาง Whisper (เวลาหยาบ ลากคลุมช่วงเงียบ) เท่านั้น
+                ctc_timed = "ctc_global" in (data.get("notes") or [])
                 for ln in data.get("lines", []):
                     if ln.get("words") and ln.get("resolved", True):
                         old = [list(w) for w in ln["words"]]
-                        ln["words"] = snap_words_to_voice(snap_line_onset(compact_line_outliers(ln["words"]), voice), voice)
+                        w0 = compact_line_outliers(ln["words"])
+                        ln["words"] = snap_words_to_voice(w0 if ctc_timed else snap_line_onset(w0, voice), voice)
                         if ln.get("curves"):
                             ln["curves"] = remap_curves(ln["curves"], old, ln["words"])
                         ln["start"] = ln["words"][0][0]
