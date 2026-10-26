@@ -324,6 +324,7 @@ class LyricsSourceSettings(_Model):
     src_lyrics_ovh: bool = True
     src_netease: bool = True
     src_qqmusic: bool = True
+    src_bugs: bool = True
     src_youtube_subs: bool = True
     audio_pick: bool = True                             # ให้ AI ฟังเสียงเทียบเนื้อเพลงหลายฉบับ แล้วเลือกฉบับที่เข้ากับเสียงที่สุด
     split_long_lines: bool = True                       # ตัดบรรทัดเนื้อเพลงที่ยาวเกินเป็นบรรทัดสั้น (ที่วรรคตอน/คำเชื่อม) แบบ Apple Music

@@ -82,3 +82,14 @@ def test_artist_in_another_script_is_not_treated_as_a_mismatch():
     assert _score_case("EVERYTHING", "黑裙子", 202.0) >= scoring.MIN_ACCEPT_SCORE
     # แต่ถ้าความยาวไม่ตรงด้วย หลักฐานอ่อนเกินไป ต้องไม่ผ่านง่ายๆ
     assert _score_case("EVERYTHING", "黑裙子", 293.0) < _score_case("EVERYTHING", "黑裙子", 202.0)
+
+
+def test_video_title_fragment_does_not_vouch_for_a_different_artist():
+    """ชื่อเพลง 'EVERYTHING' ต้องไม่ทำให้วง 'Everything Everything' ดูเหมือนศิลปินที่ตรง"""
+    from app.core.models import TrackRef
+    from app.lyrics.scoring import score_candidate  # noqa: F401
+    from app.lyrics import scoring
+
+    assert scoring._similar("The Black Skirts", "Everything Everything") < 0.5
+    assert scoring._similar("EVERYTHING", "Regret") < 0.5
+    assert TrackRef is not None

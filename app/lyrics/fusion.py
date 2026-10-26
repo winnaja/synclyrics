@@ -79,6 +79,16 @@ def _main_script(c: LyricsCandidate) -> str:
     return top
 
 
+def _spine_rank(c: LyricsCandidate) -> float:
+    """ใช้เลือก 'โครง' ของเพลง: คะแนนก่อนโบนัส + ความเห็นพ้องกับแหล่งอื่น
+
+    ฉบับที่ไม่มีแหล่งไหนตรงด้วยเลย (consensus = 0 ทั้งที่มีผู้โหวตอื่น) มักเป็นเพลงคนละเพลงที่บังเอิญได้คะแนนสูง
+    (เคสจริง: เนื้อของ Everything Everything base 66 ชนะฉบับที่ถูก base 58 แล้วถูกเลือกเป็นโครงทั้งที่ consensus = 0.0)
+    ใช้ score รวม (มีโบนัสฉันทามติ) เฉพาะตอนเลือกโครง ไม่ได้เอาไปถ่วงน้ำหนักโหวตซ้ำ จึงไม่เกิดการยืนยันตัวเองวนซ้ำ
+    """
+    return float(c.score)
+
+
 def _weight(c: LyricsCandidate) -> float:
     """น้ำหนักของเสียงหนึ่ง = คะแนนก่อนโบนัสฉันทามติ
 
@@ -140,11 +150,11 @@ def fuse(candidates: list[LyricsCandidate], meta: TrackMeta | None = None,
               if _weight(c) >= scoring.CONSENSUS_VOTER_MIN and len(c.lyrics.lines) >= MIN_LINES]
     if len(usable) < MIN_VOTERS:
         return None
-    spine = max(usable, key=_weight)
+    spine = max(usable, key=_spine_rank)
     group = _dedupe([c for c in usable if _version_ok(c, spine)])
     if len(group) < MIN_VOTERS:
         return None
-    spine = max(group, key=_weight)            # หลังยุบฉบับซ้ำแล้ว ตัวนำอาจเปลี่ยน
+    spine = max(group, key=_spine_rank)        # หลังยุบฉบับซ้ำแล้ว ตัวนำอาจเปลี่ยน
     others = [c for c in group if c is not spine]
 
     spine_keys = _candidate_keys(spine)

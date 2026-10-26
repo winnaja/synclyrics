@@ -60,12 +60,42 @@ def _norm(s: str) -> str:
     return re.sub(r"[\W_]+", " ", s.casefold()).strip()
 
 
+# คำเสริมท้ายชื่อที่ไม่ทำให้เป็นคนละเพลง ตัดทิ้งก่อนเทียบ
+_NOISE_WORDS = frozenset({
+    "official", "audio", "video", "mv", "m/v", "music", "lyric", "lyrics", "visualizer", "visualiser", "hd", "hq", "4k",
+    "remastered", "remaster", "explicit", "topic", "vevo", "version", "ver", "feat", "ft", "featuring", "prod", "with",
+})
+
+
+def _core_tokens(norm_text: str) -> list[str]:
+    return [t for t in norm_text.split() if t and t not in _NOISE_WORDS]
+
+
 def _similar(a: str, b: str) -> float:
-    """0-1 ความคล้ายของข้อความสองชุด (ว่างข้างใดข้างหนึ่ง = ไม่รู้ ให้ 0.5)"""
+    """0-1 ความคล้ายของข้อความสองชุด (ว่างข้างใดข้างหนึ่ง = ไม่รู้ ให้ 0.5)
+
+    เดิมใช้ token_set_ratio ล้วนๆ ซึ่งให้ 100% ทันทีถ้าคำของข้อความสั้นเป็นส่วนย่อยของข้อความยาว
+    ชื่อ 'EVERYTHING' จึงตรง 100% กับ 'Everything Everything - Regret (Official Audio)' (คนละเพลง คนละวง)
+    และศิลปิน 'The Black Skirts' กับ 'Everything Everything' ก็ได้ 0.85 · ตอนนี้ถ้ามีคำเกินที่ไม่ใช่คำเสริมทั่วไป
+    ต้องลดคะแนนตามสัดส่วนคำที่เกิน (ผู้ใช้ติติง 2026-10-26: 'หาแค่ชื่อเพลงแล้วเอามาใส่')
+    """
     na, nb = _norm(a), _norm(b)
     if not na or not nb:
         return 0.5
-    return fuzz.token_set_ratio(na, nb) / 100.0
+    base = fuzz.token_set_ratio(na, nb) / 100.0
+    ta, tb = _core_tokens(na), _core_tokens(nb)
+    if not ta or not tb:
+        return base
+    # ภาษาที่ไม่เว้นวรรค (ไทย/จีน/ญี่ปุ่น/เกาหลีติดกัน) แยกคำไม่ได้ ใช้ผลเดิม ไม่ลงโทษมั่ว
+    if len(ta) < 2 and len(tb) < 2:
+        return base
+    short, long_ = (ta, tb) if len(ta) <= len(tb) else (tb, ta)
+    extra = [t for t in long_ if t not in short]
+    if not extra:
+        return base
+    # คำเกินที่ซ้ำกับคำที่มีอยู่แล้ว (Everything Everything) ก็ยังนับเป็นคำเกิน — บอกว่าอีกฝั่งยาวกว่าจริง
+    coverage = len(short) / len(long_)
+    return min(base, 0.35 + 0.65 * coverage) if coverage < 1.0 else base
 
 
 ALT_TITLE_FACTOR = 0.85  # เทียบกับชิ้นส่วนดิบของชื่อวิดีโอ (กรณีแยกลำดับศิลปิน/เพลงผิด) ได้ไม่เต็ม
@@ -203,7 +233,11 @@ def score_candidate(candidate: LyricsCandidate, meta: TrackMeta, duration: float
     # ชื่อ / ศิลปิน (แหล่งตรงกับวิดีโอไม่มีชื่อให้เทียบ = ถือว่าตรง)
     title_sim = 1.0 if direct else _best_similarity(candidate.matched_title, meta.title, meta.alt_titles)
     detail["title"] = WEIGHTS["title"] * title_sim
-    artist_sim = 1.0 if direct else _best_similarity(candidate.matched_artist, meta.artist, meta.alt_titles)
+    # alt_titles คือชิ้นส่วนดิบของชื่อวิดีโอ (ไว้กันกรณีแยกลำดับศิลปิน/เพลงผิด) ซึ่งมีชื่อเพลงรวมอยู่ด้วย
+    # ถ้าเอามาเทียบกับศิลปินของผู้สมัครทั้งหมด ชื่อเพลง 'EVERYTHING' จะกลายเป็นหลักฐานว่าวง 'Everything Everything' ตรง (0.85)
+    # จึงตัดชิ้นส่วนที่ซ้ำกับชื่อเพลงออก เหลือเฉพาะชิ้นที่อาจเป็นชื่อศิลปินจริง
+    alt_for_artist = tuple(a for a in meta.alt_titles if _norm(a) != _norm(meta.title))
+    artist_sim = 1.0 if direct else _best_similarity(candidate.matched_artist, meta.artist, alt_for_artist)
     detail["artist"] = WEIGHTS["artist"] * artist_sim
 
     # ความยาว
