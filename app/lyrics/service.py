@@ -30,7 +30,7 @@ from app.core import db as dbmod
 from app.core.config import LyricsSourceSettings
 from app.core.log import get_logger
 from app.core.models import Lyrics, TimingLevel, TrackMeta, TrackRef
-from app.lyrics import scoring
+from app.lyrics import fusion, scoring
 from app.lyrics.parsers.lrc import parse_plain
 from app.lyrics.linebreak import split_long_lines
 from app.lyrics.sources.base import LyricsCandidate, LyricsQuery, LyricsSource, discover
@@ -106,7 +106,7 @@ class LyricsService:
         cls = self._source_classes.get(name)
         if cls is not None:
             return cls.display_name
-        return {"manual": "ที่วางเอง"}.get(name, name)
+        return {"manual": "ที่วางเอง", fusion.SOURCE_NAME: "SyncLyrics (รวมหลายแหล่ง)"}.get(name, name)
 
     def _label(self, lyrics: Lyrics) -> str:
         return source_label(lyrics, self._display(lyrics.source))
@@ -169,6 +169,19 @@ class LyricsService:
                                                     matched_duration=ly.duration, score=r["score"])))
         ch = conn.execute("SELECT lyrics_id FROM lyrics_choice WHERE video_id=?", (video_id,)).fetchone()
         return cands, (ch["lyrics_id"] if ch else None)
+
+    @staticmethod
+    def _fusable(cands: list[LyricsCandidate]) -> bool:
+        """มีเนื้อเพลงที่ใช้ได้พอให้รวมไหม (เงื่อนไขเดียวกับ fusion.fuse) — ไม่พอ = ค้นซ้ำก็ไม่เกิดฉบับรวม"""
+        n = sum(1 for c in cands if c.lyrics.source != fusion.SOURCE_NAME
+                and max(0.0, float(c.score_detail.get("base", c.score))) >= scoring.CONSENSUS_VOTER_MIN
+                and len(c.lyrics.lines) >= fusion.MIN_LINES)
+        return n >= fusion.MIN_VOTERS
+
+    @staticmethod
+    def _is_current_fusion(c: LyricsCandidate) -> bool:
+        ly = c.lyrics
+        return ly.source == fusion.SOURCE_NAME and ly.source_id.startswith(f"v{fusion.FUSION_VERSION}:")
 
     def _set_choice(self, video_id: str, lyrics_id: int) -> None:
         self._db().execute(
@@ -250,9 +263,22 @@ class LyricsService:
         if cached:
             cands = [c for _, c in cached]
             pick = next((c for i, c in cached if i == choice_id), None)
-            result = self._present(cands, duration, meta, pick=pick, from_cache=True)
-            if result.chosen is not None:
-                return result
+            # ผู้ใช้เลือกฉบับเองไว้ = เคารพการเลือกนั้น ไม่เอา fusion ไปทับ
+            # ไม่ได้เลือก: ใช้ cache ได้เฉพาะเมื่อมีฉบับ fusion ของเวอร์ชันปัจจุบันอยู่แล้ว
+            # (cache ที่มีแต่เนื้อดิบจากเว็บ หรือ fusion เวอร์ชันเก่า ต้องไม่จบแค่นี้ ไม่งั้นข้าม fusion ไปตลอดกาล)
+            if pick is None:
+                pick = next((c for c in cands if self._is_current_fusion(c)), None)
+            # ไม่มีฉบับ fusion แต่รวมไม่ได้อยู่แล้วเพราะมีเนื้อที่ใช้ได้ไม่ถึง 2 ฉบับ = ค้นซ้ำก็ได้ผลเดิม ใช้ cache ต่อได้
+            # (ถ้ามี >= 2 ฉบับที่ใช้ได้แต่ยังไม่มี fusion เวอร์ชันนี้ = cache เก่าก่อนมีระบบรวม ต้องรวมใหม่)
+            if pick is None and not self._fusable(cands):
+                pick = next((c for i, c in cached if i == choice_id), None)
+                keep_cache = True
+            else:
+                keep_cache = pick is not None
+            if keep_cache:
+                result = self._present(cands, duration, meta, pick=pick, from_cache=True)
+                if result.chosen is not None:
+                    return result
 
         query = LyricsQuery(track=track, meta=meta, duration=duration, extras=extras or {})
         sources = self.enabled_sources()
@@ -293,8 +319,21 @@ class LyricsService:
             await asyncio.to_thread(self._save_names, track.video_id, meta)
         all_cands = [c for c in all_cands if c.score > 0]
         scoring.apply_consensus(all_cands)
+        fused_pick: LyricsCandidate | None = None
+        try:
+            got = await asyncio.to_thread(fusion.fuse, all_cands, meta, duration)
+        except Exception:
+            log.exception("รวมเนื้อเพลงไม่สำเร็จ ใช้ฉบับที่คะแนนสูงสุดแทน")
+            got = None
+        if got is not None:
+            fused_pick, report = got
+            all_cands.append(fused_pick)
+            log.info("รวมเนื้อเพลงหลายแหล่ง", extra={"data": {
+                "video_id": track.video_id, "voters": report.voters, "spine": report.spine,
+                "lines": report.lines_total, "replaced": report.lines_replaced,
+                "agreed": report.lines_agreed}})
         await asyncio.to_thread(self._store, track.video_id, all_cands)
-        result = self._present(all_cands, duration, meta)
+        result = self._present(all_cands, duration, meta, pick=fused_pick)
         if result.chosen is not None:
             log.info("เลือกเนื้อเพลง", extra={"data": {
                 "video_id": track.video_id, "label": result.source_label,

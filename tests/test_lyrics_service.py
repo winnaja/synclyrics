@@ -196,3 +196,97 @@ def test_split_line_leaves_short_lines_and_lines_with_translation_alone():
     long_tr = _timed_line("You know all that's fake and God knows why I need you")
     long_tr.translation = "คำแปล"
     assert split_line(long_tr, 30) == [long_tr]
+
+
+# ---------- fusion ต่อเข้า find() จริง ----------
+
+def _fusable(source: str, texts: list[str], timing: TimingLevel = TimingLevel.LINE) -> Lyrics:
+    lines = [Line(i * 4.0, i * 4.0 + 3.0, [Word(t, i * 4.0, i * 4.0 + 3.0)]) for i, t in enumerate(texts)]
+    return Lyrics(lines=lines, timing=timing, source=source, source_id=source)
+
+
+_BASE = ["alpha bravo charlie", "delta echo foxtrot", "golf hotel india", "juliet kilo lima",
+         "mike november oscar", "papa quebec romeo"]
+
+
+def _three_sources(wrong_in_top: bool = True):
+    top = list(_BASE)
+    if wrong_in_top:
+        top[2] = "golf hotel oscar"
+    a = list(_BASE)
+    a[5] = "papa quebec sierra"
+    return {
+        "top": make_source("top", result=_fusable("top", top, TimingLevel.WORD)),
+        "a": make_source("a", result=_fusable("a", a)),
+        "b": make_source("b", result=_fusable("b", list(_BASE))),
+    }
+
+
+async def test_final_result_is_fused_not_the_top_candidate(db_path) -> None:
+    """ฉบับที่คะแนนสูงสุดผิดบรรทัดหนึ่ง -> ผลสุดท้ายต้องเป็นฉบับที่ระบบรวมเอง ไม่ใช่เว็บเดียว"""
+    svc = LyricsService(db_path, sources=_three_sources(), client=object())
+    res = await svc.find(TRACK, 200.0)
+    assert res.chosen is not None
+    assert res.chosen.source == "fusion", "ผลสุดท้ายต้องเป็นฉบับที่ผ่านการรวม"
+    assert res.chosen.lines[2].text == "golf hotel india", "บรรทัดที่ผิดต้องถูกแก้ตามเสียงข้างมาก"
+    assert res.source_label.startswith("จาก SyncLyrics"), "ป้ายต้องไม่แอบอ้างเป็นเว็บใดเว็บหนึ่ง"
+
+
+async def test_original_candidates_are_kept_alongside_fusion(db_path) -> None:
+    """ต้องเก็บฉบับต้นทางไว้ตรวจย้อนหลัง ไม่ทิ้ง"""
+    svc = LyricsService(db_path, sources=_three_sources(), client=object())
+    res = await svc.find(TRACK, 200.0)
+    kinds = {c.lyrics.source for c in res.candidates}
+    assert {"top", "a", "b", "fusion"} <= kinds
+
+
+async def test_fused_result_is_cached_and_reused_without_searching(db_path) -> None:
+    calls = {"n": 0}
+    srcs = _three_sources()
+    for cls in srcs.values():
+        orig = cls.search
+
+        async def counting(self, q, c, orig=orig):
+            calls["n"] += 1
+            return await orig(self, q, c)
+        cls.search = counting  # type: ignore[method-assign]
+    svc = LyricsService(db_path, sources=srcs, client=object())
+    await svc.find(TRACK, 200.0)
+    before = calls["n"]
+    res2 = await svc.find(TRACK, 200.0)
+    assert calls["n"] == before, "มีฉบับรวมที่เวอร์ชันตรงใน cache แล้วต้องไม่ค้นใหม่"
+    assert res2.from_cache and res2.chosen is not None and res2.chosen.source == "fusion"
+
+
+async def test_legacy_cache_without_fusion_is_not_frozen(db_path) -> None:
+    """cache เก่าที่มีแต่เนื้อดิบหลายฉบับ (ก่อนมีระบบรวม) ต้องไม่ข้าม fusion ไปตลอดกาล"""
+    svc = LyricsService(db_path, sources=_three_sources(), client=object())
+    await svc.find(TRACK, 200.0)
+    conn = svc._db()
+    conn.execute("DELETE FROM lyrics WHERE source='fusion'")      # จำลอง cache ก่อนมี fusion
+    res = await svc.find(TRACK, 200.0)
+    assert not res.from_cache, "มีเนื้อดิบพอรวมได้แต่ไม่มีฉบับรวม = ต้องค้น/รวมใหม่"
+    assert res.chosen is not None and res.chosen.source == "fusion"
+
+
+async def test_fusion_failure_falls_back_to_best_candidate(db_path, monkeypatch) -> None:
+    """รวมไม่สำเร็จต้องยังมีเนื้อเพลงแสดง ไม่ใช่ว่าง"""
+    from app.lyrics import fusion
+
+    def boom(*a, **k):
+        raise RuntimeError("fusion พัง")
+    monkeypatch.setattr(fusion, "fuse", boom)
+    svc = LyricsService(db_path, sources=_three_sources(), client=object())
+    res = await svc.find(TRACK, 200.0)
+    assert res.chosen is not None and res.chosen.source == "top"
+
+
+async def test_user_choice_is_not_overridden_by_fusion(db_path) -> None:
+    svc = LyricsService(db_path, sources=_three_sources(), client=object())
+    first = await svc.find(TRACK, 200.0)
+    other = next(c for c in first.candidates if c.lyrics.source == "b")
+    cached, _ = await asyncio.to_thread(svc._load_cached, TRACK.video_id)
+    lid = next(i for i, c in cached if c.lyrics.source == other.lyrics.source)
+    await asyncio.to_thread(svc._set_choice, TRACK.video_id, lid)
+    res = await svc.find(TRACK, 200.0)
+    assert res.chosen is not None and res.chosen.source == "b", "ผู้ใช้เลือกเองแล้วต้องเคารพ"
