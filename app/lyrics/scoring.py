@@ -43,6 +43,14 @@ VERSION_MISMATCH_FACTOR = 0.9
 MIN_ACCEPT_SCORE = 40.0
 # ความคล้ายของชื่อที่ต่ำกว่านี้จะถูกลดคะแนนรวมตามสัดส่วน
 TITLE_GATE = 0.6
+# ศิลปินเป็นประตูกั้นเหมือนชื่อเพลง (ผู้ใช้ติติง 2026-10-26: "ไม่แมชศิลปิน ดูแต่ชื่อเพลงแล้วเอามาใส่เลย")
+# เดิมศิลปินมีแค่น้ำหนัก 20/100 ชื่อเพลงตรงแต่ศิลปินคนละคนได้ 79-81 คะแนน ผ่านเกณฑ์ง่ายๆ (เช่น Everything ของ Lifehouse)
+ARTIST_GATE = 0.5              # ศิลปินคล้ายกันต่ำกว่านี้ (เทียบอักษรชนิดเดียวกันได้) = คนละคน
+ARTIST_MISMATCH_FACTOR = 0.3
+# ศิลปินเขียนคนละระบบอักษร (The Black Skirts vs 黑裙子) เทียบข้อความไม่ได้ ห้ามตัดสินว่าผิด แต่ต้องมีหลักฐานอื่นช่วย
+CROSS_SCRIPT_ARTIST_FACTOR = 0.8
+CROSS_SCRIPT_SAFE_DIFF_S = 6.0  # ความยาวใกล้กันขนาดนี้ = หลักฐานพอว่าเป็นเพลงเดียวกัน ไม่ต้องลดคะแนน
+
 # แหล่งที่ผูกกับวิดีโอโดยตรง (เวลาตรงกับ MV แน่นอน) ได้โบนัส
 DIRECT_SOURCES = frozenset({"youtube_subs"})
 DIRECT_SOURCE_BONUS = 8.0
@@ -175,6 +183,17 @@ def script_factor(lyrics: Any, meta: TrackMeta) -> tuple[float, str]:
     return ROMANIZED_FACTOR, "เพลงจีน/ญี่ปุ่นแต่เนื้อเป็นอักษรละติน"
 
 
+
+def _is_cross_script(a: str, b: str) -> bool:
+    """สองชื่อใช้ระบบอักษรหลักต่างกัน (เช่นละติน vs จีน/ฮันกึล) — เทียบความคล้ายตัวอักษรไม่ได้"""
+    def dom(t: str) -> str:
+        c = _script_counts(t)
+        c = {k: v for k, v in c.items() if v}
+        return max(c, key=lambda k: c[k]) if c else ""
+    da, db = dom(a), dom(b)
+    return bool(da and db and da != db)
+
+
 def score_candidate(candidate: LyricsCandidate, meta: TrackMeta, duration: float | None) -> float:
     """เติม candidate.score และ candidate.score_detail แล้วคืนคะแนน"""
     detail: dict[str, float] = {}
@@ -195,7 +214,13 @@ def score_candidate(candidate: LyricsCandidate, meta: TrackMeta, duration: float
     elif want and got:
         diff = abs(want - got)
         detail["duration_diff_s"] = diff
-        if diff > REJECT_DURATION_DIFF_S and diff > want * REJECT_DURATION_RATIO:
+        # ชื่อ+ศิลปินตรงกันชัดเจน = เพลงเดียวกันแน่ ความยาวต่างมากเพราะวิดีโอตัดสั้น/มีฉากเปิด/คนละฉบับตัดต่อ
+        # ห้ามปฏิเสธ (เคสจริง 2026-10-26: EVERYTHING ของ The Black Skirts ยาว 293 วิ แต่วิดีโอยาว 202 วิ ต่าง 91 วิ
+        # ถูกปฏิเสธทั้งที่เป็นเพลงเดียวกัน แล้วระบบไปแสดงเนื้อคนละเพลงแทน) · ให้ถ่วงคะแนนลง แล้วเสียง (CTC) เป็นคนตัดสิน
+        artist_known_same = artist_sim >= 0.85 or (
+            bool(meta.artist and candidate.matched_artist) and _is_cross_script(meta.artist, candidate.matched_artist))
+        strong_same = title_sim >= 0.9 and artist_known_same and diff <= min(150.0, want * 0.6)
+        if diff > REJECT_DURATION_DIFF_S and diff > want * REJECT_DURATION_RATIO and not strong_same:
             candidate.score = 0.0
             detail["rejected_duration"] = diff
             candidate.score_detail = detail
@@ -224,9 +249,22 @@ def score_candidate(candidate: LyricsCandidate, meta: TrackMeta, duration: float
     total *= duration_factor
     if detail["version"] == 0.0:
         total *= VERSION_MISMATCH_FACTOR
+    if not direct and meta.artist and candidate.matched_artist:
+        if _is_cross_script(meta.artist, candidate.matched_artist) and artist_sim < ARTIST_GATE:
+            # เทียบไม่ได้ว่าคนเดียวกันไหม: ความยาวใกล้เคียงมากถึงจะเชื่อ ไม่งั้นลดคะแนนลงเล็กน้อยให้ฉบับที่ยืนยันศิลปินได้มาก่อน
+            near = bool(want and got and abs(want - got) <= CROSS_SCRIPT_SAFE_DIFF_S)
+            if not near:
+                total *= CROSS_SCRIPT_ARTIST_FACTOR
+                detail["artist_cross_script"] = CROSS_SCRIPT_ARTIST_FACTOR
+            else:
+                detail["artist"] = max(detail["artist"], WEIGHTS["artist"] * 0.6)   # ไม่ให้เสียคะแนนศิลปินเพราะเขียนคนละอักษร
+        elif artist_sim < ARTIST_GATE:
+            total *= ARTIST_MISMATCH_FACTOR
+            detail["artist_gate"] = artist_sim / ARTIST_GATE
     if title_sim < TITLE_GATE:
         # ชื่อไม่ใกล้เคียง = ไม่ใช่เพลงนี้ แม้ความยาว/เวลาจะดีก็ไม่ควรผ่านเกณฑ์ (กันได้คะแนนฟรีจากข้ออื่น)
-        total *= title_sim / TITLE_GATE
+        # คูณทบสองครั้ง: ศิลปินตรง+ความยาวตรงให้คะแนนรวมสูงมาก (ชื่อเพลงต่างแต่ศิลปินเดียวกันเคยได้ 42.6 ผ่านเกณฑ์)
+        total *= (title_sim / TITLE_GATE) ** 2
         detail["title_gate"] = title_sim / TITLE_GATE
     if not direct:    # แหล่งตรง (คำบรรยายของวิดีโอนั้นเอง) เป็นภาษาเดียวกับเสียงอยู่แล้ว
         sf, why = script_factor(candidate.lyrics, meta)

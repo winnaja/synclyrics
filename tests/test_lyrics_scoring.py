@@ -26,3 +26,59 @@ def test_apply_consensus_leaves_single_candidate_unchanged():
     a = _cand(["one two three", "four five six", "seven eight nine", "ten eleven twelve"], "lrclib", 80.0)
     scoring.apply_consensus([a])
     assert a.score == 80.0
+
+
+def test_same_title_and_artist_survives_big_duration_gap():
+    """เคสจริง: EVERYTHING ของ The Black Skirts ยาว 293 วิ แต่วิดีโอตัดสั้นเหลือ 202 วิ (ต่าง 91 วิ)
+    เดิมถูกปฏิเสธเป็น 0 แล้วระบบไปแสดงเนื้อคนละเพลง · ชื่อ+ศิลปินตรงกันต้องไม่ตกเพราะความยาวอย่างเดียว"""
+    from app.core.models import Line, Lyrics, TimingLevel, TrackMeta, Word
+    from app.lyrics import scoring
+    from app.lyrics.sources.base import LyricsCandidate
+
+    meta = TrackMeta(title="EVERYTHING", artist="The Black Skirts")
+    lines = [Line(i * 4.0, i * 4.0 + 3.0, [Word("you are my everything", i * 4.0, i * 4.0 + 3.0)]) for i in range(8)]
+
+    def score(title, artist, dur):
+        c = LyricsCandidate(lyrics=Lyrics(lines=lines, timing=TimingLevel.LINE, source="lrclib", source_id="1"),
+                            matched_title=title, matched_artist=artist, matched_duration=dur)
+        return scoring.score_candidate(c, meta, 202.0)
+
+    assert score("EVERYTHING", "The Black Skirts", 293.0) >= scoring.MIN_ACCEPT_SCORE
+    # แต่คนละเพลงยังต้องตกเหมือนเดิม
+    assert score("Everything", "Some Other Artist", 293.0) < scoring.MIN_ACCEPT_SCORE
+    assert score("Another Song", "The Black Skirts", 293.0) < scoring.MIN_ACCEPT_SCORE
+
+
+def _score_case(title, artist, dur, meta_title="EVERYTHING", meta_artist="The Black Skirts", video=202.0):
+    from app.core.models import Line, Lyrics, TimingLevel, TrackMeta, Word
+    from app.lyrics import scoring
+    from app.lyrics.sources.base import LyricsCandidate
+
+    meta = TrackMeta(title=meta_title, artist=meta_artist)
+    lines = [Line(i * 4.0, i * 4.0 + 3.0, [Word("some words", i * 4.0, i * 4.0 + 3.0)]) for i in range(8)]
+    c = LyricsCandidate(lyrics=Lyrics(lines=lines, timing=TimingLevel.LINE, source="lrclib", source_id="1"),
+                        matched_title=title, matched_artist=artist, matched_duration=dur)
+    return scoring.score_candidate(c, meta, video)
+
+
+def test_same_title_different_artist_is_rejected():
+    """ผู้ใช้ติติง: 'ไม่แมชศิลปิน ดูแต่ชื่อเพลง' — ชื่อตรงแต่คนละศิลปิน (Lifehouse/Alanis) เคยได้ 79-81 ผ่านเกณฑ์ง่ายๆ"""
+    from app.lyrics import scoring
+
+    assert _score_case("Everything", "Lifehouse", 203.0) < scoring.MIN_ACCEPT_SCORE
+    assert _score_case("Everything", "Alanis Morissette", 201.0) < scoring.MIN_ACCEPT_SCORE
+
+
+def test_same_artist_different_title_is_rejected():
+    from app.lyrics import scoring
+
+    assert _score_case("Another Song", "The Black Skirts", 202.0) < scoring.MIN_ACCEPT_SCORE
+
+
+def test_artist_in_another_script_is_not_treated_as_a_mismatch():
+    """黑裙子 = The Black Skirts (คนละระบบอักษร เทียบข้อความไม่ได้) ห้ามตีว่าคนละศิลปินเมื่อความยาวตรง"""
+    from app.lyrics import scoring
+
+    assert _score_case("EVERYTHING", "黑裙子", 202.0) >= scoring.MIN_ACCEPT_SCORE
+    # แต่ถ้าความยาวไม่ตรงด้วย หลักฐานอ่อนเกินไป ต้องไม่ผ่านง่ายๆ
+    assert _score_case("EVERYTHING", "黑裙子", 293.0) < _score_case("EVERYTHING", "黑裙子", 202.0)

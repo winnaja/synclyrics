@@ -264,7 +264,8 @@ class LyricsService:
             # ให้คะแนน cache ใหม่ด้วยเกณฑ์ปัจจุบัน (ชื่อ/ศิลปิน/ความยาวของเพลงที่เล่นอยู่ตอนนี้) — ผลที่บันทึกไว้ตอนก่อนมีเกณฑ์
             # ตรวจภาษา/ความยาวจะได้ไม่ถูกใช้ต่อ · ไม่ต้องค้นเน็ตใหม่ (ใช้ชื่อที่ตัวเองบันทึกไว้ในแต่ละฉบับ)
             for _, c in cached:
-                if c.lyrics.source not in ("manual", fusion.SOURCE_NAME):
+                # ฉบับที่ไม่ได้เก็บชื่อ/ศิลปินของแหล่งไว้ (cache รุ่นเก่า) ไม่มีหลักฐานพอจะให้คะแนนใหม่ = คงคะแนนเดิม ไม่ลดมั่ว
+                if c.lyrics.source not in ("manual", fusion.SOURCE_NAME) and c.matched_title:
                     stored = c.score
                     scoring.score_candidate(c, meta, duration)
                     c.score_detail["stored_score"] = stored
