@@ -196,7 +196,11 @@ def snap_line_onset(words: list[list[float]], vocals: Any, sample_rate: int = 16
     for idx, w in enumerate(out):
         s, e = float(w[0]), float(w[1])
         i0 = max(0, int(s / SNAP_FRAME_S))
-        i1 = min(len(db), int((e + ONSET_LOOKAHEAD_S) / SNAP_FRAME_S))
+        # คำท้ายบรรทัด (ไม่ใช่คำแรก) ห้ามมองเลยจุดจบของคำ: end ของมันถูกต่อ (ลากค้าง) ไปจนเกือบถึงบรรทัดถัดไปอยู่แล้ว
+        # ถ้าเผื่อมองล่วงหน้า จะไปเจอ "เสียงขาด→กลับมาดัง" ของบรรทัดถัดไปแล้วลากคำท้ายไปเริ่มที่นั่น (เคสจริง EVERYTHING 78.8→80.82
+        # คำ 날엔 ที่ร้องจบไปแล้วเพิ่งขึ้นสีตอนบรรทัดถัดไปจะเริ่ม — เกือบทุกเพลง)
+        look = ONSET_LOOKAHEAD_S if idx < len(out) - 1 or idx == 0 else 0.0
+        i1 = min(len(db), int((e + look) / SNAP_FRAME_S))
         if i1 - i0 >= 3 and (idx == 0 or e - s >= 0.6):
             best = _last_dip_onset(db, i0, i1, dip_thr, on_thr, first_len if idx == 0 else mid_len, first=idx == 0)
             if best is not None:
