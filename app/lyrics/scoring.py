@@ -236,7 +236,10 @@ def score_candidate(candidate: LyricsCandidate, meta: TrackMeta, duration: float
     # alt_titles คือชิ้นส่วนดิบของชื่อวิดีโอ (ไว้กันกรณีแยกลำดับศิลปิน/เพลงผิด) ซึ่งมีชื่อเพลงรวมอยู่ด้วย
     # ถ้าเอามาเทียบกับศิลปินของผู้สมัครทั้งหมด ชื่อเพลง 'EVERYTHING' จะกลายเป็นหลักฐานว่าวง 'Everything Everything' ตรง (0.85)
     # จึงตัดชิ้นส่วนที่ซ้ำกับชื่อเพลงออก เหลือเฉพาะชิ้นที่อาจเป็นชื่อศิลปินจริง
-    alt_for_artist = tuple(a for a in meta.alt_titles if _norm(a) != _norm(meta.title))
+    nt = _norm(meta.title)
+    alt_for_artist = tuple(a for a in meta.alt_titles if nt not in _norm(a))   # ชิ้นที่มีชื่อเพลงปนอยู่ ('ศิลปิน - เพลง') ก็ไม่ใช่ชื่อศิลปิน
+    if not direct and _best_similarity(candidate.matched_title, meta.artist, alt_for_artist) >= 0.8:
+        alt_for_artist = meta.alt_titles       # ชื่อเพลงของผู้สมัครตรงกับ 'ศิลปิน' ที่เดามา = ลำดับถูกสลับ ชิ้นส่วนทั้งหมดใช้เทียบได้
     artist_sim = 1.0 if direct else _best_similarity(candidate.matched_artist, meta.artist, alt_for_artist)
     detail["artist"] = WEIGHTS["artist"] * artist_sim
 

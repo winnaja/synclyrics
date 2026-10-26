@@ -93,3 +93,19 @@ def test_video_title_fragment_does_not_vouch_for_a_different_artist():
     assert scoring._similar("The Black Skirts", "Everything Everything") < 0.5
     assert scoring._similar("EVERYTHING", "Regret") < 0.5
     assert TrackRef is not None
+
+
+def test_other_artist_with_overlapping_title_word_is_rejected():
+    """'The Black Skirts - EVERYTHING' ต้องไม่ได้เนื้อของ 'Everything Is Recorded' (เคสจริง ชื่อวิดีโอมีชื่อเพลงรวมกับศิลปิน)"""
+    from app.core.models import Line, Lyrics, TimingLevel, Word
+    from app.lyrics import scoring
+    from app.lyrics.sources.base import LyricsCandidate
+    from app.lyrics.title_parser import parse_track
+    from app.core.models import TrackRef
+
+    meta = parse_track(TrackRef(video_id="v", title="The Black Skirts - EVERYTHING", channel="The Worst Taste", duration=304.0))
+    lines = [Line(i * 4.0, i * 4.0 + 3.0, [Word("x", i * 4.0, i * 4.0 + 3.0)]) for i in range(8)]
+    ly = Lyrics(lines=lines, timing=TimingLevel.LINE, source="lrclib", source_id="1")
+    c = LyricsCandidate(lyrics=ly, matched_title="Everything Is Recorded", matched_artist="Everything Is Recorded",
+                        matched_duration=307.3)
+    assert scoring.score_candidate(c, meta, 304.0) < scoring.MIN_ACCEPT_SCORE
