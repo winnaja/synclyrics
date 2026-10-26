@@ -290,3 +290,16 @@ async def test_user_choice_is_not_overridden_by_fusion(db_path) -> None:
     await asyncio.to_thread(svc._set_choice, TRACK.video_id, lid)
     res = await svc.find(TRACK, 200.0)
     assert res.chosen is not None and res.chosen.source == "b", "ผู้ใช้เลือกเองแล้วต้องเคารพ"
+
+
+async def test_next_candidate_walks_past_rejected_fusion_to_other_versions(db_path) -> None:
+    """เสียงปฏิเสธฉบับที่เลือก -> ปุ่ม/ระบบ 'ถัดไป' ต้องเดินผ่านทุกฉบับไม่ซ้ำ ไม่วนอยู่ฉบับเดิม"""
+    svc = LyricsService(db_path, sources=_three_sources(), client=object())
+    first = await svc.find(TRACK, 200.0)
+    seen = [first.chosen.source]
+    for _ in range(4):
+        nxt = await svc.next_candidate(TRACK.video_id)
+        assert nxt.chosen is not None
+        seen.append(nxt.chosen.source)
+    assert len(set(seen)) == 4, f"ต้องผ่านครบ 4 ฉบับ (fusion + 3 แหล่ง) ก่อนวนกลับ: {seen}"
+    assert seen[0] == seen[4], "ครบรอบแล้วต้องกลับมาที่ฉบับแรก"

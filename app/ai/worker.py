@@ -405,6 +405,7 @@ class Worker:
             # ใช้เมื่อผ่านการตรวจกับเวลาเดิมของเนื้อเพลง ไม่ผ่าน (โครงสร้างต่าง/ไม่มีเวลาเดิม) = เส้นทาง Whisper + MMS เดิม
             res = None
             alt_idx = 0
+            ctc_rejected_all = False     # CTC ฟังเสียงแล้วปฏิเสธเนื้อเพลง "ทุกฉบับ" ที่ส่งมา = น่าจะเป็นของอีกเพลง
             if acfg.get("ctc_first", True):
                 voice16 = vocals16[:int(duration * 16000)] if cached is None else self._load_vocals(stems_dir)
                 mms = self.mms() if voice16 is not None else None
@@ -431,6 +432,10 @@ class Worker:
                         if pick is not None:
                             res, alt_idx = pick[1], pick[0]
                             lines_in = cands[alt_idx]
+                        elif scored:
+                            # วัดกับเพลงจริง 50 เพลง: เนื้อถูกเพลงผ่านการตรวจเวลา 84% ส่วนเนื้อผิดเพลงผ่าน 0% (scripts/eval_wrong_song.py)
+                            # การปฏิเสธทุกฉบับจึงเป็นสัญญาณ "คนละเพลง" ที่เชื่อถือได้ ไม่ใช่แค่ "โครงสร้างต่าง"
+                            ctc_rejected_all = True
                     except Exception as e:  # noqa: BLE001 — เช่น VRAM ไม่พอ: ใช้เส้นทาง Whisper
                         self.emit("degraded", {"reason": f"CTC ทั้งเพลงไม่สำเร็จ: {e}", "action": "ใช้ Whisper + MMS รายบรรทัด"})
                         res = None
@@ -444,6 +449,10 @@ class Worker:
                         self._refine(res, lines_in, v16, language, [(0.0, len(v16) / 16000)], {})
             data = self._pack(vid, res, only_resolved=False)
             data["version_mismatch"] = res.coverage < float(acfg.get("min_coverage", 0.25))
+            if ctc_rejected_all and res.coverage < float(acfg.get("mismatch_when_ctc_rejects", 0.6)):
+                # CTC ปฏิเสธทุกฉบับ และเส้นทาง Whisper ก็จับคู่ได้ไม่ถึงครึ่ง = เนื้อเพลงน่าจะเป็นของเพลงอื่น
+                # (เส้นทาง Whisper ผ่อนปรนกว่ามาก คำซ้ำๆ อย่าง baby/love/ooh ก็จับคู่ได้เกิน 25% ง่ายๆ)
+                data["version_mismatch"] = True
             prefer_heard = bool(acfg.get("prefer_heard", True))   # ผู้ใช้สั่ง: ใช้ "เสียงที่ AI ได้ยิน" เป็นหลัก เนื้อเพลงเว็บใช้แก้คำที่ตรงกันเท่านั้น
             if (prefer_heard or res.coverage < float(acfg.get("reconstruct_below", 0.5))) and transcript_reliable(all_words):
                 # โครงสร้างเพลงต่างจากเนื้อเพลง (รีมิกซ์/คนละเวอร์ชัน): จับคู่เรียงลำดับไม่ได้ -> สร้างบรรทัดตามลำดับที่ร้องจริงจากเสียง

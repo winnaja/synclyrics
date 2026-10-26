@@ -352,6 +352,10 @@ class LyricsService:
         usable = [(i, c) for i, c in cached if c.score > 0]
         if not usable:
             return self._present([], duration, None)
+        if choice_id is None:
+            # ยังไม่มีใครเลือก = ระบบกำลังแสดงฉบับที่รวมแล้ว (ถ้ามี) ให้ฉบับนั้นอยู่ต้นลำดับ
+            # ไม่งั้น "ถัดไป" จากฉบับรวมจะกระโดดไปฉบับคะแนนต่ำสุดก่อน (อาจเป็นฉบับผิดเพลง)
+            usable.sort(key=lambda t: 0 if self._is_current_fusion(t[1]) else 1)
         ids = [i for i, _ in usable]
         if choice_id in ids:
             idx = (ids.index(choice_id) + 1) % len(ids)

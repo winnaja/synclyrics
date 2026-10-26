@@ -468,6 +468,7 @@ class AnalysisCfg(_Model):
     window_s: float = 30.0      # ขนาดช่วงที่ประมวลผลทีละครั้ง (ทยอยส่งผลทีละช่วง)
     context_s: float = 3.0      # ซ้อนหัวท้ายแต่ละช่วงให้ Demucs/Whisper เห็นบริบท
     min_coverage: float = 0.25  # จับคู่เนื้อเพลงกับเสียงได้น้อยกว่านี้ = เนื้อเพลงอาจเป็นคนละเวอร์ชัน
+    mismatch_when_ctc_rejects: float = 0.6   # CTC ปฏิเสธเนื้อเพลงทุกฉบับ + จับคู่ Whisper ได้น้อยกว่านี้ = น่าจะคนละเพลง (ผ่อนปรนกว่า min_coverage)
     heard_extras: bool = True        # เก็บสิ่งที่ AI ได้ยินแต่ไม่มีในเนื้อเพลงเว็บ (คอรัส/ad-lib) เป็นแถวเสียงประสานตัวเล็ก
     ctc_first: bool = True           # จัดเวลาด้วย CTC ทั้งเพลงก่อน (เร็ว+แม่น) ไม่ผ่านการตรวจ = Whisper + MMS รายบรรทัด
     batched_whisper: bool = True     # ถอดเสียงทั้งเพลงครั้งเดียวแบบ batch (เร็วกว่า ~4 เท่า) · false = ทีละช่วงพร้อมส่งผลทยอย
