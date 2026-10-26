@@ -501,7 +501,8 @@ class Worker:
                         view = [{"start": ln["start"], "end": ln["end"],
                                  "words": ln.get("text_words") or (list(lines_in[ln["i"]].words) if ln["i"] < len(lines_in) else [])}
                                 for ln in data.get("lines", [])]
-                        for ln, is_bg in zip(data.get("lines", []), classify_backing(view, voice)):
+                        bg = classify_backing(view, voice, quiet_db=acfg.get("backing_quiet_db"))
+                        for ln, is_bg in zip(data.get("lines", []), bg):
                             if is_bg and ln.get("resolved", True):
                                 ln["voice"] = "background"
                     except Exception:  # noqa: BLE001 — ตรวจเสียงประสานไม่ได้ = แสดงเป็นบรรทัดปกติ ไม่พังทั้งงาน

@@ -246,12 +246,15 @@ def _norm_text(words: list[str]) -> str:
     return "".join(c for c in "".join(words).casefold() if c.isalnum())
 
 
-def classify_backing(lines: list[dict[str, Any]], vocals: Any, sample_rate: int = 16000) -> list[bool]:
+def classify_backing(lines: list[dict[str, Any]], vocals: Any, sample_rate: int = 16000,
+                     quiet_db: float | None = None) -> list[bool]:
     """บรรทัดไหนเป็นเสียงประสาน/คอรัส (แสดงเป็นแถวเล็กใต้บรรทัดหลัก แบบ Apple Music)
     ดูจาก (1) ความดังของ stem เสียงร้องในช่วงบรรทัด เทียบค่ากลางของ "บรรทัดรอบข้าง" — เสียงประสานเบากว่าเสียงนำ
           (เทียบทั้งเพลงไม่ได้: ท่อนที่ร้องเบาทั้งท่อนจะถูกตีเป็นประสานยกท่อน)
           (2) ข้อความสะท้อนบรรทัดข้างเคียง (เช่น "I watch you" ซ้ำท้ายบรรทัดก่อนหน้า) ที่ร้องซ้อน/ติดกัน
     lines = [{"start","end","words":[str,...]}] · คืน bool ต่อบรรทัด (เพลงมีบรรทัดน้อยกว่า 8 = ไม่ตัดสิน)"""
+    quiet = BACKING_QUIET_DB if quiet_db is None else float(quiet_db)
+    echo_quiet = max(0.0, quiet - (BACKING_QUIET_DB - BACKING_ECHO_QUIET_DB))
     n = len(lines)
     flags = [False] * n
     if n < 8:
@@ -285,7 +288,7 @@ def classify_backing(lines: list[dict[str, Any]], vocals: Any, sample_rate: int 
                 gap = float(lines[j]["start"]) - float(ln["end"]) if j > i else float(ln["start"]) - float(lines[j]["end"])
                 if gap < 1.5:
                     echo = True
-        flags[i] = quiet_by >= BACKING_QUIET_DB or (echo and quiet_by >= BACKING_ECHO_QUIET_DB)
+        flags[i] = quiet_by >= quiet or (echo and quiet_by >= echo_quiet)
     return flags
 
 
