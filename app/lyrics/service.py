@@ -293,6 +293,7 @@ class LyricsService:
                     stored = c.score
                     scoring.score_candidate(c, meta, duration)
                     c.score_detail["stored_score"] = stored
+            scoring.apply_consensus([c for _, c in cached if c.lyrics.source != fusion.SOURCE_NAME])
             cands = [c for _, c in cached]
             pick = next((c for i, c in cached if i == choice_id), None)
             if pick is not None and pick.lyrics.source != "manual" and pick.score < scoring.MIN_ACCEPT_SCORE:
@@ -300,11 +301,20 @@ class LyricsService:
             # ผู้ใช้เลือกฉบับเองไว้ = เคารพการเลือกนั้น ไม่เอา fusion ไปทับ
             # ไม่ได้เลือก: ใช้ cache ได้เฉพาะเมื่อมีฉบับ fusion ของเวอร์ชันปัจจุบันอยู่แล้ว
             # (cache ที่มีแต่เนื้อดิบจากเว็บ หรือ fusion เวอร์ชันเก่า ต้องไม่จบแค่นี้ ไม่งั้นข้าม fusion ไปตลอดกาล)
+            if pick is not None and pick.score_detail.get("cross_script") and (
+                    pick.score_detail.get("consensus", 0.0) < scoring.CROSS_SCRIPT_MIN_CONSENSUS):
+                # ฉบับที่เลือกไว้ยืนยันศิลปินไม่ได้และไม่มีฉบับอื่นรับรอง = อย่าใช้ cache ตัดสิน ค้นใหม่ให้ครบก่อน
+                pick = None
+                cached_unverified = True
+            else:
+                cached_unverified = False
             if pick is None:
                 pick = next((c for c in cands if self._is_current_fusion(c)), None)
             # ไม่มีฉบับ fusion แต่รวมไม่ได้อยู่แล้วเพราะมีเนื้อที่ใช้ได้ไม่ถึง 2 ฉบับ = ค้นซ้ำก็ได้ผลเดิม ใช้ cache ต่อได้
             # (ถ้ามี >= 2 ฉบับที่ใช้ได้แต่ยังไม่มี fusion เวอร์ชันนี้ = cache เก่าก่อนมีระบบรวม ต้องรวมใหม่)
-            if pick is None and not self._fusable(cands):
+            if cached_unverified:
+                keep_cache = False
+            elif pick is None and not self._fusable(cands):
                 pick = next((c for i, c in cached if i == choice_id), None)
                 keep_cache = True
             else:
@@ -391,6 +401,7 @@ class LyricsService:
             for _, c in cached:
                 if c.lyrics.source not in ("manual", fusion.SOURCE_NAME) and c.matched_title:
                     scoring.score_candidate(c, meta, duration)
+            scoring.apply_consensus([c for _, c in cached if c.lyrics.source != fusion.SOURCE_NAME])
         usable = [(i, c) for i, c in cached if c.score >= scoring.MIN_ACCEPT_SCORE]
         if not usable:
             return self._present([], duration, None)

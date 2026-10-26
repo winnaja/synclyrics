@@ -109,3 +109,24 @@ def test_other_artist_with_overlapping_title_word_is_rejected():
     c = LyricsCandidate(lyrics=ly, matched_title="Everything Is Recorded", matched_artist="Everything Is Recorded",
                         matched_duration=307.3)
     assert scoring.score_candidate(c, meta, 304.0) < scoring.MIN_ACCEPT_SCORE
+
+
+def test_cross_script_candidate_unconfirmed_by_verified_one_is_demoted():
+    """ศิลปินคนละอักษร + ชื่อเพลงสามัญ + ความยาวใกล้กัน ต้องไม่ชนะฉบับที่ยืนยันศิลปินได้และเนื้อไม่ตรงกับมันเลย"""
+    from app.core.models import Line, Lyrics, TimingLevel, TrackMeta, Word
+    from app.lyrics import scoring
+    from app.lyrics.sources.base import LyricsCandidate
+
+    def cand(texts, artist, dur):
+        lines = [Line(i * 4.0, i * 4.0 + 3.0, [Word(t, i * 4.0, i * 4.0 + 3.0)]) for i, t in enumerate(texts)]
+        ly = Lyrics(lines=lines, timing=TimingLevel.LINE, source="x", source_id=artist)
+        return LyricsCandidate(lyrics=ly, matched_title="Everything", matched_artist=artist, matched_duration=dur)
+
+    meta = TrackMeta(title="Everything", artist="The Black Skirts", duration=293.0)
+    right = cand([f"alpha bravo {w}" for w in "charlie delta echo foxtrot golf hotel".split()], "The Black Skirts", 293.0)
+    other = cand([f"zulu yankee {w}" for w in "xray whiskey victor uniform tango sierra".split()], "王力宏", 299.0)
+    for c in (right, other):
+        scoring.score_candidate(c, meta, 293.0)
+    scoring.apply_consensus([right, other])
+    assert other.score_detail.get("cross_script_unconfirmed") == 1.0
+    assert other.score < scoring.MIN_ACCEPT_SCORE < right.score

@@ -290,6 +290,7 @@ def score_candidate(candidate: LyricsCandidate, meta: TrackMeta, duration: float
         if _is_cross_script(meta.artist, candidate.matched_artist) and artist_sim < ARTIST_GATE:
             # เทียบไม่ได้ว่าคนเดียวกันไหม: ความยาวใกล้เคียงมากถึงจะเชื่อ ไม่งั้นลดคะแนนลงเล็กน้อยให้ฉบับที่ยืนยันศิลปินได้มาก่อน
             near = bool(want and got and abs(want - got) <= CROSS_SCRIPT_SAFE_DIFF_S)
+            detail["cross_script"] = 1.0       # ยืนยันศิลปินด้วยตัวอักษรไม่ได้ -> apply_consensus ต้องหาฉบับอื่นมายืนยันให้
             if not near:
                 total *= CROSS_SCRIPT_ARTIST_FACTOR
                 detail["artist_cross_script"] = CROSS_SCRIPT_ARTIST_FACTOR
@@ -320,6 +321,8 @@ def score_candidate(candidate: LyricsCandidate, meta: TrackMeta, duration: float
 # ---------------------------------------------------------------------------
 # ฉันทามติระหว่างแหล่ง (ผู้ใช้สั่ง 2026-10-21): เอาเนื้อเพลงของทุกแหล่งมาเทียบกัน อันที่ตรงกับแหล่งอื่นมากที่สุดคือฉบับที่น่าเชื่อถือที่สุด
 # ---------------------------------------------------------------------------
+CROSS_SCRIPT_MIN_CONSENSUS = 0.25   # ฉบับที่ศิลปินคนละอักษร ต้องมีเนื้อตรงกับฉบับที่ยืนยันศิลปินแล้วอย่างน้อยเท่านี้
+CROSS_SCRIPT_UNCONFIRMED_FACTOR = 0.4
 CONSENSUS_WEIGHT = 25.0        # โบนัสสูงสุดที่ได้จากการตรงกับแหล่งอื่น (เพิ่มจากคะแนนปกติ)
 CONSENSUS_VOTER_MIN = 30.0     # แหล่งที่มีคะแนนต่ำกว่านี้ไม่มีสิทธิ์โหวต (น่าจะคนละเพลง)
 CONSENSUS_LINE_RATIO = 82      # บรรทัดสองฉบับนับว่า "ตรงกัน" เมื่อคล้ายกันเกินนี้ (rapidfuzz ratio)
@@ -374,3 +377,10 @@ def apply_consensus(candidates: list[LyricsCandidate]) -> None:
         consensus = num / den if den else 0.0
         c.score_detail["consensus"] = round(consensus, 3)
         c.score = base + CONSENSUS_WEIGHT * consensus if den else base
+        if c.score_detail.get("cross_script") and consensus < CROSS_SCRIPT_MIN_CONSENSUS and any(
+                v is not c and not v.score_detail.get("cross_script") and v.score_detail["base"] >= MIN_ACCEPT_SCORE
+                for v in voters):
+            # ชื่อเพลงสามัญ + ความยาวใกล้กัน + ศิลปินเขียนคนละอักษร = หลักฐานอ่อน (เคสจริง: 'Everything' ของ 王力宏 ยาว 299 วิ
+            # ถูกใช้กับ EVERYTHING ของ The Black Skirts 293 วิ) ถ้ามีฉบับที่ยืนยันศิลปินได้แล้วเนื้อไม่ตรงกับมันเลย = ไม่ใช่เพลงนี้
+            c.score = base * CROSS_SCRIPT_UNCONFIRMED_FACTOR
+            c.score_detail["cross_script_unconfirmed"] = 1.0
