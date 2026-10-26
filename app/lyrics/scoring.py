@@ -12,6 +12,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import re
 
 from rapidfuzz import fuzz
@@ -86,6 +88,93 @@ def _candidate_tags(candidate: LyricsCandidate) -> frozenset[str]:
     return clean_title(candidate.matched_title)[1]
 
 
+
+# ---------------------------------------------------------------------------
+# ตรวจตัวอักษรของเนื้อเพลงให้ตรงกับภาษาของเพลง (ผู้ใช้รายงาน 2026-10-26: เพลงเกาหลีได้เนื้อจีน/ญี่ปุ่น)
+# ระบบเดิมไม่เคยดูภาษาของเนื้อเลย ดูแค่ชื่อ/ศิลปิน/ความยาว จึงปล่อยฉบับแปล ฉบับคัฟเวอร์ และฉบับคนละเพลงผ่านมาได้
+# ---------------------------------------------------------------------------
+SCRIPT_MISMATCH_FACTOR = 0.25   # ตัวอักษรไม่ตรงภาษาเพลง: คะแนนเหลือเท่านี้ (ต่ำกว่าเกณฑ์รับ ยกเว้นไม่มีอย่างอื่นเลย)
+ROMANIZED_FACTOR = 0.6          # เพลงเกาหลี/ญี่ปุ่น/ไทย แต่เนื้อเป็นอักษรละติน (คำอ่าน/คำแปล) ลดน้อยกว่า
+
+
+def _script_counts(text: str) -> dict[str, int]:
+    c = {"hangul": 0, "kana": 0, "han": 0, "thai": 0, "latin": 0}
+    for ch in text:
+        o = ord(ch)
+        if 0xAC00 <= o <= 0xD7A3 or 0x1100 <= o <= 0x11FF or 0x3130 <= o <= 0x318F:
+            c["hangul"] += 1
+        elif 0x3040 <= o <= 0x30FF or 0x31F0 <= o <= 0x31FF:
+            c["kana"] += 1
+        elif 0x4E00 <= o <= 0x9FFF or 0x3400 <= o <= 0x4DBF:
+            c["han"] += 1
+        elif 0x0E00 <= o <= 0x0E7F:
+            c["thai"] += 1
+        elif ch.isalpha() and o < 0x250:
+            c["latin"] += 1
+    return c
+
+
+def lyrics_scripts(lyrics: Any) -> dict[str, float]:
+    """สัดส่วนตัวอักษรแต่ละชนิดในเนื้อเพลง (รวมกัน = 1) · ไม่มีตัวอักษรเลย = ว่าง"""
+    c = _script_counts("".join(w.text for ln in lyrics.lines for w in ln.words))
+    n = sum(c.values())
+    return {k: v / n for k, v in c.items()} if n else {}
+
+
+def expected_script(meta: TrackMeta) -> str | None:
+    """ภาษาที่น่าจะเป็นของเพลง ดูจากตัวอักษรในชื่อเพลง/ศิลปิน (None = บอกไม่ได้ เช่นชื่อเป็นอังกฤษล้วน)"""
+    # ดูชื่อเพลงเป็นหลัก: ศิลปินเกาหลี/จีนร้องเพลงอังกฤษได้ ชื่อศิลปินจึงบอกภาษาของเพลงไม่ได้
+    # (วัดกับ 2,830 เพลงที่รู้ว่าเนื้อถูก: ใช้ชื่อศิลปินด้วยเตือนผิด 2% ส่วนใหญ่เป็นแบบนี้)
+    # ชื่อเพลงไม่มีตัวอักษรเฉพาะภาษาเลย ค่อยดูศิลปินเฉพาะกรณีที่ชื่อทุกส่วนเป็นอักษรละติน = ไม่ตัดสิน
+    c = _script_counts(" ".join([meta.title, *meta.alt_titles]))
+    if c["hangul"] >= 2:
+        return "hangul"
+    if c["kana"] >= 2:
+        return "japanese"
+    if c["thai"] >= 2:
+        return "thai"
+    if c["han"] >= 2:
+        return "han"            # คันจิ/ฮั่นจื้อ: เป็นได้ทั้งจีนและญี่ปุ่น
+    return None
+
+
+def script_factor(lyrics: Any, meta: TrackMeta) -> tuple[float, str]:
+    """-> (ตัวคูณคะแนน, เหตุผล) · 1.0 = ไม่มีปัญหาหรือตัดสินไม่ได้"""
+    want = expected_script(meta)
+    if want is None:
+        return 1.0, ""
+    fr = lyrics_scripts(lyrics)
+    if not fr:
+        return 1.0, ""
+    hg, kn, han, th, lat = (fr.get(k, 0.0) for k in ("hangul", "kana", "han", "thai", "latin"))
+    if want == "hangul":
+        if hg >= 0.15:
+            return 1.0, ""
+        if max(kn + han, th) >= 0.4:
+            return SCRIPT_MISMATCH_FACTOR, "เพลงเกาหลีแต่เนื้อเป็นจีน/ญี่ปุ่น/ไทย"
+        return ROMANIZED_FACTOR, "เพลงเกาหลีแต่เนื้อไม่ใช่ฮันกึล"
+    if want == "japanese":
+        if kn >= 0.08:
+            return 1.0, ""
+        if hg >= 0.3 or th >= 0.4:
+            return SCRIPT_MISMATCH_FACTOR, "เพลงญี่ปุ่นแต่เนื้อเป็นเกาหลี/ไทย"
+        if han >= 0.4:
+            return SCRIPT_MISMATCH_FACTOR, "เพลงญี่ปุ่นแต่เนื้อเป็นจีน (ไม่มีคานะ)"
+        return ROMANIZED_FACTOR, "เพลงญี่ปุ่นแต่เนื้อไม่ใช่ญี่ปุ่น"
+    if want == "thai":
+        if th >= 0.2:
+            return 1.0, ""
+        if max(hg, kn + han) >= 0.4:
+            return SCRIPT_MISMATCH_FACTOR, "เพลงไทยแต่เนื้อเป็นเกาหลี/จีน/ญี่ปุ่น"
+        return ROMANIZED_FACTOR, "เพลงไทยแต่เนื้อไม่ใช่อักษรไทย"
+    # want == "han": จีนหรือญี่ปุ่น — รับทั้งฮั่นจื้อและคานะ ปฏิเสธเกาหลี/ไทย
+    if han + kn >= 0.3:
+        return 1.0, ""
+    if hg >= 0.3 or th >= 0.3:
+        return SCRIPT_MISMATCH_FACTOR, "เพลงจีน/ญี่ปุ่นแต่เนื้อเป็นเกาหลี/ไทย"
+    return ROMANIZED_FACTOR, "เพลงจีน/ญี่ปุ่นแต่เนื้อเป็นอักษรละติน"
+
+
 def score_candidate(candidate: LyricsCandidate, meta: TrackMeta, duration: float | None) -> float:
     """เติม candidate.score และ candidate.score_detail แล้วคืนคะแนน"""
     detail: dict[str, float] = {}
@@ -139,6 +228,11 @@ def score_candidate(candidate: LyricsCandidate, meta: TrackMeta, duration: float
         # ชื่อไม่ใกล้เคียง = ไม่ใช่เพลงนี้ แม้ความยาว/เวลาจะดีก็ไม่ควรผ่านเกณฑ์ (กันได้คะแนนฟรีจากข้ออื่น)
         total *= title_sim / TITLE_GATE
         detail["title_gate"] = title_sim / TITLE_GATE
+    if not direct:    # แหล่งตรง (คำบรรยายของวิดีโอนั้นเอง) เป็นภาษาเดียวกับเสียงอยู่แล้ว
+        sf, why = script_factor(candidate.lyrics, meta)
+        if sf < 1.0:
+            total *= sf
+            detail["script_mismatch"] = sf
     if direct:
         total += DIRECT_SOURCE_BONUS
         detail["direct_bonus"] = DIRECT_SOURCE_BONUS

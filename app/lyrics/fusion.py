@@ -62,7 +62,21 @@ def _candidate_keys(c: LyricsCandidate) -> list[str]:
 
 def _version_ok(a: LyricsCandidate, b: LyricsCandidate) -> bool:
     """เวอร์ชันเข้ากันได้ไหม — live/remix/acoustic ของคนละฉบับห้ามรวมกัน"""
-    return scoring._candidate_tags(a) == scoring._candidate_tags(b)
+    if scoring._candidate_tags(a) != scoring._candidate_tags(b):
+        return False
+    # คนละตัวอักษรหลัก (เกาหลี vs จีน) = คนละภาษา/ฉบับแปล ห้ามเอาบรรทัดมาปนกัน
+    return _main_script(a) == _main_script(b)
+
+
+def _main_script(c: LyricsCandidate) -> str:
+    fr = scoring.lyrics_scripts(c.lyrics)
+    if not fr:
+        return ""
+    # คานะปนคันจิ = ญี่ปุ่น · ฮั่นจื้อล้วน = จีน
+    if fr.get("kana", 0.0) >= 0.08:
+        return "japanese"
+    top = max(fr, key=lambda k: fr[k])
+    return top
 
 
 def _weight(c: LyricsCandidate) -> float:
