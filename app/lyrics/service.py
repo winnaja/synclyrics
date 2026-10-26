@@ -263,9 +263,12 @@ class LyricsService:
         if cached:
             # ให้คะแนน cache ใหม่ด้วยเกณฑ์ปัจจุบัน (ชื่อ/ศิลปิน/ความยาวของเพลงที่เล่นอยู่ตอนนี้) — ผลที่บันทึกไว้ตอนก่อนมีเกณฑ์
             # ตรวจภาษา/ความยาวจะได้ไม่ถูกใช้ต่อ · ไม่ต้องค้นเน็ตใหม่ (ใช้ชื่อที่ตัวเองบันทึกไว้ในแต่ละฉบับ)
+            # ฉบับที่ไม่ได้เก็บชื่อเพลงของแหล่งไว้ (cache รุ่นเก่า) พิสูจน์ไม่ได้ว่าเป็นเพลงนี้ ถ้าคงคะแนนเดิมไว้ เนื้อเพลงคนละเพลง
+            # (เช่น Regret ของวงอื่น) จะค้างอยู่ด้วยคะแนนก่อนมีเกณฑ์ตลอดไป -> ไม่ใช้ (ยกเว้นที่ผู้ใช้ใส่เอง) ให้ค้นใหม่
+            cached = [(i, c) for i, c in cached
+                      if c.lyrics.source in ("manual", fusion.SOURCE_NAME) or c.matched_title]
             for _, c in cached:
-                # ฉบับที่ไม่ได้เก็บชื่อ/ศิลปินของแหล่งไว้ (cache รุ่นเก่า) ไม่มีหลักฐานพอจะให้คะแนนใหม่ = คงคะแนนเดิม ไม่ลดมั่ว
-                if c.lyrics.source not in ("manual", fusion.SOURCE_NAME) and c.matched_title:
+                if c.lyrics.source not in ("manual", fusion.SOURCE_NAME):
                     stored = c.score
                     scoring.score_candidate(c, meta, duration)
                     c.score_detail["stored_score"] = stored

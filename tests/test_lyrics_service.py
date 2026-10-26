@@ -22,7 +22,7 @@ TRACK = TrackRef(video_id="vid00000001", title="Nova Waves - Midnight Drive (Off
 
 def _lyrics(source: str, timing: TimingLevel, sid: str = "1") -> Lyrics:
     lines = [Line(i * 4.0, i * 4.0 + 3.0, [Word(f"line {i} of text", i * 4.0, i * 4.0 + 3.0)]) for i in range(8)]
-    return Lyrics(lines=lines, timing=timing, source=source, source_id=sid)
+    return Lyrics(lines=lines, timing=timing, source=source, source_id=sid, title="Midnight Drive", artist="Nova Waves")
 
 
 def make_source(name: str, *, result=None, delay: float = 0.0, boom: bool = False, unofficial: bool = False,
@@ -202,7 +202,7 @@ def test_split_line_leaves_short_lines_and_lines_with_translation_alone():
 
 def _fusable(source: str, texts: list[str], timing: TimingLevel = TimingLevel.LINE) -> Lyrics:
     lines = [Line(i * 4.0, i * 4.0 + 3.0, [Word(t, i * 4.0, i * 4.0 + 3.0)]) for i, t in enumerate(texts)]
-    return Lyrics(lines=lines, timing=timing, source=source, source_id=source)
+    return Lyrics(lines=lines, timing=timing, source=source, source_id=source, title="Midnight Drive", artist="Nova Waves")
 
 
 _BASE = ["alpha bravo charlie", "delta echo foxtrot", "golf hotel india", "juliet kilo lima",
