@@ -233,9 +233,13 @@ def remap_curves(curves: list[list[float] | None], old: list[list[float]], new: 
     return out
 
 
-BACKING_QUIET_DB = 6.0         # เบากว่าระดับเสียงร้องหลักของเพลงเท่านี้ = น่าจะเป็นเสียงประสาน/คอรัส
-BACKING_ECHO_QUIET_DB = 3.0    # บรรทัดที่เป็นเสียงสะท้อนของบรรทัดข้างเคียง ใช้เกณฑ์เบากว่านี้ก็พอ
-BACKING_MAX_WORDS = 6
+# ปรับ 2026-10-26 จากการวัดกับ 160 เพลง (8,595 บรรทัด) ที่เฉลยใส่วงเล็บกำกับเสียงประสานไว้ — scripts/eval_backing.py
+# ของเดิมเทียบความดังกับ "ค่ากลางทั้งเพลง" ทำให้ท่อนที่ร้องเบาทั้งท่อนถูกตีเป็นประสานยกท่อน และตัดบรรทัดยาวเกิน 6 คำทิ้ง
+# ทั้งที่จำนวนคำไม่มีประโยชน์เลย (AUC 0.475 เท่าเดาสุ่ม) จึงพลาดเสียงประสานไป 85%
+# ของใหม่เทียบกับค่ากลาง "แถวนั้น" (AUC 0.725 เทียบ 0.684) · ผล: จับได้ 14% -> 35% โดยเสียงร้องหลักยังไม่ถูกตีผิด 95%
+BACKING_QUIET_DB = 3.5         # เบากว่าบรรทัดรอบข้างเท่านี้ = น่าจะเป็นเสียงประสาน/คอรัส
+BACKING_ECHO_QUIET_DB = 1.5    # บรรทัดที่เป็นเสียงสะท้อนของบรรทัดข้างเคียง ใช้เกณฑ์เบากว่านี้ก็พอ
+BACKING_NEAR_LINES = 8         # กี่บรรทัดรอบข้างที่ใช้หาค่ากลาง "แถวนั้น"
 
 
 def _norm_text(words: list[str]) -> str:
@@ -244,7 +248,8 @@ def _norm_text(words: list[str]) -> str:
 
 def classify_backing(lines: list[dict[str, Any]], vocals: Any, sample_rate: int = 16000) -> list[bool]:
     """บรรทัดไหนเป็นเสียงประสาน/คอรัส (แสดงเป็นแถวเล็กใต้บรรทัดหลัก แบบ Apple Music)
-    ดูจาก (1) ความดังของ stem เสียงร้องในช่วงบรรทัด เทียบค่ากลางของทั้งเพลง — เสียงประสานเบากว่าเสียงนำ
+    ดูจาก (1) ความดังของ stem เสียงร้องในช่วงบรรทัด เทียบค่ากลางของ "บรรทัดรอบข้าง" — เสียงประสานเบากว่าเสียงนำ
+          (เทียบทั้งเพลงไม่ได้: ท่อนที่ร้องเบาทั้งท่อนจะถูกตีเป็นประสานยกท่อน)
           (2) ข้อความสะท้อนบรรทัดข้างเคียง (เช่น "I watch you" ซ้ำท้ายบรรทัดก่อนหน้า) ที่ร้องซ้อน/ติดกัน
     lines = [{"start","end","words":[str,...]}] · คืน bool ต่อบรรทัด (เพลงมีบรรทัดน้อยกว่า 8 = ไม่ตัดสิน)"""
     n = len(lines)
@@ -264,13 +269,15 @@ def classify_backing(lines: list[dict[str, Any]], vocals: Any, sample_rate: int 
     known = [v for v in levels if v is not None]
     if len(known) < 8:
         return flags
-    ref = float(np.median(known))
+    gref = float(np.median(known))
     texts = [_norm_text(ln["words"]) for ln in lines]
     for i, ln in enumerate(lines):
         lv = levels[i]
-        nw = len(ln["words"])
-        if lv is None or nw == 0 or nw > BACKING_MAX_WORDS:
+        if lv is None or len(ln["words"]) == 0:
             continue
+        near = [levels[j] for j in range(max(0, i - BACKING_NEAR_LINES), min(n, i + BACKING_NEAR_LINES + 1))
+                if levels[j] is not None and j != i]
+        ref = float(np.median(near)) if len(near) >= 4 else gref
         quiet_by = ref - lv
         echo = False
         for j in (i - 1, i + 1):
