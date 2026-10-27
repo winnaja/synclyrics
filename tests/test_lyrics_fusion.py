@@ -150,3 +150,20 @@ def test_timing_level_drops_when_text_changed():
     fused, report = fusion.fuse([top, a, b])
     assert report.lines_replaced == 1
     assert fused.lyrics.timing == TimingLevel.LINE
+
+
+def test_line_split_differently_does_not_drop_half_the_line():
+    """ฉบับหลักรวมสองบรรทัดเป็นหนึ่ง อีกสองแหล่งแยกเป็นสองบรรทัด -> ห้ามแทนที่ด้วยครึ่งแรก (ครึ่งหลังจะหายทั้งเพลง)"""
+    from app.lyrics import fusion
+
+    joined = ["alpha bravo charlie delta echo foxtrot", "golf hotel india", "juliet kilo lima", "mike november oscar"]
+    split = ["alpha bravo charlie", "delta echo foxtrot", "golf hotel india", "juliet kilo lima", "mike november oscar"]
+    split_b = list(split)
+    split_b[4] = "mike november papa"
+    top = _cand(joined, "lrclib", 90.0)
+    a = _cand(split, "netease", 85.0)
+    b = _cand(split_b, "qqmusic", 85.0)
+
+    fused, report = fusion.fuse([top, a, b])
+    assert _texts(fused)[0] == joined[0], "บรรทัดที่รวมไว้ต้องคงเนื้อครบ"
+    assert report.lines_replaced == 0

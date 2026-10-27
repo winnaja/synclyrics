@@ -104,3 +104,6 @@ class BugsSource(LyricsSource):
 
         got = await asyncio.gather(*(one(*t) for t in tracks), return_exceptions=True)
         return [c for c in got if isinstance(c, LyricsCandidate)]
+
+
+SOURCE = BugsSource

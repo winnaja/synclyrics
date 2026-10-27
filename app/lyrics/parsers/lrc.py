@@ -36,6 +36,14 @@ def is_credit_line(text: str) -> bool:
     return _CREDIT_RE.match(text) is not None
 
 
+def _is_header_line(text: str, t: float, next_t: float | None) -> bool:
+    """บรรทัดหัวเพลง 'ชื่อเพลง - ศิลปิน' ที่ QQ/NetEase ใส่ไว้ที่ 0 วิ (เช่น '사랑이 잘 - IU (아이유)/吴赫 (오혁)') ไม่ใช่เนื้อร้อง
+
+    ดูเฉพาะบรรทัดแรก: เริ่มก่อน 1 วิ มี ' - ' คั่น และบรรทัดถัดไปห่างออกไปอย่างน้อย 3 วิ (เนื้อร้องจริงยังไม่เริ่ม)
+    """
+    return t < 1.0 and " - " in text and (next_t is None or next_t - t >= 3.0)
+
+
 def _to_seconds(m: re.Match[str]) -> float:
     minutes, seconds, frac = m.group(1), m.group(2), m.group(3)
     value = int(minutes) * 60 + int(seconds)
@@ -123,6 +131,8 @@ def parse_lrc(text: str, source: str = "lrc", duration: float | None = None) -> 
     for i, (t, body) in enumerate(entries):
         plain = _WORD_TS_RE.sub("", body).strip()
         if not plain or is_credit_line(plain):
+            continue
+        if not lines and _is_header_line(plain, t, entries[i + 1][0] if i + 1 < len(entries) else None):
             continue
         nxt = entries[i + 1][0] if i + 1 < len(entries) else (duration if duration and duration > t else t + _DEFAULT_LAST_LINE_S)
         words = _parse_enhanced(body, t)

@@ -154,3 +154,12 @@ def test_vtt_drops_bracketed_sound_descriptions_but_keeps_inline_brackets():
     vtt = ("WEBVTT\n\n00:00:01.000 --> 00:00:02.000\n[Ring]\n\n00:00:03.000 --> 00:00:05.000\nThe club is not the best place [whoo]\n\n"
            "00:00:06.000 --> 00:00:07.000\n[Applause]\n")
     assert [ln.text for ln in parse_vtt(vtt).lines] == ["The club is not the best place [whoo]"]
+
+
+def test_header_title_artist_line_at_zero_is_dropped() -> None:
+    """บรรทัด 'ชื่อเพลง - ศิลปิน' ที่ 0 วิ (QQ/NetEase) ไม่ใช่เนื้อร้อง"""
+    from app.lyrics.parsers.lrc import parse_lrc
+
+    ly = parse_lrc("[00:00.00]사랑이 잘 - IU (아이유)/吴赫 (오혁)\n[00:14.51]미리 말할게 사과는 안 해\n[00:18.08]아무 말 없이 너 후회 안 해\n",
+                   source="qqmusic")
+    assert ly.lines[0].text == "미리 말할게 사과는 안 해"

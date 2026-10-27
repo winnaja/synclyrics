@@ -27,7 +27,7 @@ from app.lyrics.timing_estimate import estimate_line
 if TYPE_CHECKING:
     from app.core.models import Line, TrackMeta
 
-FUSION_VERSION = 2          # เปลี่ยนเมื่อวิธีรวมเปลี่ยน -> cache เดิมถือว่าหมดอายุ
+FUSION_VERSION = 3          # เปลี่ยนเมื่อวิธีรวมเปลี่ยน -> cache เดิมถือว่าหมดอายุ
 SOURCE_NAME = "fusion"
 
 MIN_VOTERS = 2              # น้อยกว่านี้ไม่มีอะไรให้เทียบ = ไม่ต้องรวม
@@ -38,6 +38,8 @@ LINE_MATCH = 82             # ถือว่าเป็น "ข้อควา
 ALIGN_FLOOR = 0.45
 SWAP_MARGIN = 1.10          # ข้อความอื่นต้องมีน้ำหนักมากกว่าของฉบับหลักเท่านี้ จึงจะเปลี่ยน (กันสลับไปมาเพราะเสียงปริ่ม)
 GAP = -0.4                  # ค่าปรับการข้ามบรรทัดตอนจัดแนว (DP)
+SPLIT_LEN_RATIO = 0.75      # อีกฉบับยาวไม่ถึงสัดส่วนนี้ (หรือยาวเกินส่วนกลับ) ของบรรทัดหลัก = แบ่งบรรทัดต่างกัน ไม่ใช่ข้อความต่างกัน
+SPLIT_CONTAIN = 85          # และเนื้อหาของบรรทัดที่สั้นกว่าอยู่ในบรรทัดที่ยาวกว่าอย่างน้อยเท่านี้ (partial_ratio)
 
 
 @dataclass(slots=True)
@@ -143,6 +145,22 @@ def _align(a: list[str], b: list[str]) -> list[int | None]:
     return out
 
 
+def _is_split_of(base_key: str, other_key: str) -> bool:
+    """อีกฉบับแค่แบ่งบรรทัดต่างกัน (ครึ่งหนึ่งของบรรทัดหลัก หรือรวมสองบรรทัดเป็นหนึ่ง) แต่เนื้อเดียวกัน
+
+    นับเป็น "เห็นด้วย" กับบรรทัดหลัก ไม่ใช่ข้อความคู่แข่ง — ถ้าให้ชนะโหวต ครึ่งหลังของบรรทัดจะหายไป
+    (เคสจริง: LRCLIB รวม '사랑이 잘 안돼, 떠올려 봐도' เป็นบรรทัดเดียว QQ/NetEase แยกสองบรรทัด
+    โหวตแทนที่ด้วย '사랑이 잘 안 돼' แล้ว '떠올려 봐도' หายทั้งเพลง)
+    """
+    a, b = len(base_key), len(other_key)
+    if not a or not b:
+        return False
+    if SPLIT_LEN_RATIO <= b / a <= 1 / SPLIT_LEN_RATIO:
+        return False
+    short, long_ = (other_key, base_key) if b < a else (base_key, other_key)
+    return fuzz.partial_ratio(short, long_) >= SPLIT_CONTAIN
+
+
 def fuse(candidates: list[LyricsCandidate], meta: TrackMeta | None = None,
          duration: float | None = None) -> tuple[LyricsCandidate, FusionReport] | None:
     """-> (ฉบับที่รวมแล้ว, รายงาน) หรือ None เมื่อหลักฐานไม่พอให้รวม (ผู้เรียกใช้ฉบับเดิมต่อ)"""
@@ -176,6 +194,8 @@ def fuse(candidates: list[LyricsCandidate], meta: TrackMeta | None = None,
             k = _key(ln)
             if not k:
                 continue
+            if k != base_key and _is_split_of(base_key, k):
+                k = base_key           # แบ่งบรรทัดต่างกันแต่เนื้อเดียวกัน = เห็นด้วยกับบรรทัดหลัก
             votes[k] = votes.get(k, 0.0) + _weight(cand)
             if k not in texts or _weight(cand) > _weight(texts[k][1]):
                 texts[k] = (ln.text, cand)
