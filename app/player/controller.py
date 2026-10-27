@@ -242,6 +242,9 @@ class PlayerController:
         self._publish_playback()
 
     def seek(self, position_s: float) -> None:
+        log.info("กรอเพลง", extra={"data": {"to": round(float(position_s), 2), "mode": self.mode,
+                                            "duration": round(float(self.duration or 0.0), 2),
+                                            "tab": self.tab_control is not None}})
         if self.mode == "companion":
             self._tab("seek", time=max(0.0, float(position_s)))
             return
