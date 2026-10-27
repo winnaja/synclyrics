@@ -96,7 +96,7 @@ function onHostMessage(m) {
       }
       break;
     case "tab_control":
-      if (S.activeTab != null) chrome.tabs.sendMessage(S.activeTab, { kind: "tab_control", ...p }).catch(() => {});
+      sendToActiveTab({ kind: "tab_control", ...p });
       break;
     case "reload_extension":
       chrome.runtime.reload();
@@ -109,6 +109,31 @@ function onHostMessage(m) {
       }
       break;
   }
+}
+
+/** ส่งคำสั่งให้แท็บต้นทาง · service worker ของ MV3 หลับได้ทุกเมื่อ (ตัวแปร S หาย) จึงอ่านแท็บที่จำไว้ใน storage.session
+ *  ถ้ายังไม่รู้ ใช้แท็บ YouTube ที่มีเสียงออก (กำลังเล่น) */
+async function sendToActiveTab(msg) {
+  try {
+    let tab = S.activeTab;
+    if (tab == null) {
+      const saved = await chrome.storage.session.get({ activeTab: null });
+      tab = saved.activeTab;
+    }
+    if (tab == null) {
+      const tabs = await chrome.tabs.query({ url: YT_URLS, audible: true });
+      if (tabs.length) tab = tabs[0].id;
+    }
+    if (tab == null) return;
+    S.activeTab = tab;
+    await chrome.tabs.sendMessage(tab, msg);
+  } catch (e) { /* แท็บปิดไปแล้ว */ }
+}
+
+function setActiveTab(tabId) {
+  if (S.activeTab === tabId) return;
+  S.activeTab = tabId;
+  try { chrome.storage.session.set({ activeTab: tabId }).catch(() => {}); } catch (e) { /* ไม่มี storage.session */ }
 }
 
 /** ส่งให้แท็บ YouTube ทุกแท็บ */
@@ -124,12 +149,12 @@ async function broadcast(msg) {
 function accept(tabId, type, payload, now) {
   const playing = type === "companion_state" && payload && payload.paused === false;
   if (playing) {
-    if (S.activeTab !== tabId) { S.activeTab = tabId; }
+    setActiveTab(tabId);
     S.activeAt = now;
     return true;
   }
   if (S.activeTab == null || S.activeTab === tabId || now - S.activeAt > ACTIVE_STALE_MS) {
-    if (S.activeTab !== tabId) S.activeTab = tabId;
+    setActiveTab(tabId);
     return true;
   }
   return false;   // แท็บอื่นกำลังเล่นอยู่ — ทิ้งรายงานของแท็บที่หยุดนี้
@@ -164,6 +189,7 @@ chrome.runtime.onMessage.addListener((m, sender, reply) => {
 chrome.tabs.onRemoved.addListener((tabId) => {
   if (tabId !== S.activeTab) return;
   S.activeTab = null;
+  try { chrome.storage.session.remove("activeTab").catch(() => {}); } catch (e) { /* ไม่มี storage.session */ }
   if (S.lastState && S.appConnected) rawSend(env("companion_state", Object.assign({}, S.lastState, { paused: true, sent_at_ms: Date.now() })));
 });
 

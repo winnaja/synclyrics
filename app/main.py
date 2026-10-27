@@ -191,6 +191,32 @@ def main(argv: list[str] | None = None) -> int:
         raise_window=lambda: (window.get("raise") or (lambda: None))(), settings=core.settings,
         show_settings=lambda: (window.get("settings") or (lambda: None))())
 
+    def auto_update_extension(_topic: str, p: dict) -> None:
+        """ส่วนขยายที่ Chrome โหลดอยู่เป็นรุ่นเก่ากว่าที่มากับโปรแกรม: คัดลอกไฟล์ใหม่ทับแล้วสั่งโหลดใหม่เอง (ทำครั้งเดียวต่อการเปิดแอป)
+        ไม่งั้นแก้ส่วนขยายแล้วผู้ใช้ต้องกดติดตั้งซ้ำเอง — เคยทำให้คลิกเนื้อเพลงแล้วไม่กรอ เพราะยังใช้ส่วนขยายรุ่นเดิม"""
+        import json as _json
+
+        from app.bridge import installer
+
+        have = str(p.get("ext_version") or "")
+        if not p.get("connected") or not have or ext_state.get("done"):
+            return
+        try:
+            want = _json.loads((core.paths.extension_src_dir / "manifest.json").read_text(encoding="utf-8"))["version"]
+            if have == want:
+                return
+            ext_state["done"] = True
+            installer.sync_extension(core.paths.extension_src_dir, core.paths.installed_extension_dir)
+            log.info("อัปเดตส่วนขยาย", extra={"data": {"from": have, "to": want}})
+            bridge.send("reload_extension", {})
+        except Exception:
+            log.exception("อัปเดตส่วนขยายอัตโนมัติไม่สำเร็จ")
+
+    ext_state: dict = {}
+    from app.core.events import BRIDGE_STATUS as _BRIDGE_STATUS
+
+    core.bus.subscribe(_BRIDGE_STATUS, auto_update_extension)
+
     def install_extension() -> str:
         """ปุ่มติดตั้งส่วนขยายใน UI (UI thread): คัดลอก + ลงทะเบียน host + clipboard + เปิด chrome://extensions"""
         from PySide6.QtGui import QGuiApplication

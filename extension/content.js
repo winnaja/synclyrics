@@ -103,7 +103,16 @@
     switch (m.action) {
       case "play": v.play().catch(() => {}); break;
       case "pause": v.pause(); break;
-      case "seek": if (typeof m.time === "number" && isFinite(m.time)) v.currentTime = Math.max(0, m.time); break;
+      case "seek":
+        if (typeof m.time === "number" && isFinite(m.time)) {
+          if (st.pageAlive) {
+            window.postMessage({ target: "synclyrics", type: "seek", value: m.time }, "*");
+          } else {
+            const top = isFinite(v.duration) && v.duration > 1 ? v.duration - 1 : Infinity;
+            v.currentTime = Math.max(0, Math.min(m.time, top));
+          }
+        }
+        break;
       case "volume":
         // ปรับผ่านตัวเล่นของ YouTube (page.js ในโลกของหน้าเว็บ) ให้แถบเสียงของ YouTube ขยับตาม · ถ้า page.js ไม่ตอบใน 400 ms ค่อยตั้งที่ <video> ตรงๆ
         if (typeof m.value === "number" && isFinite(m.value)) {

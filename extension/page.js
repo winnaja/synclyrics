@@ -1,4 +1,4 @@
-// สคริปต์ที่รันใน "โลกของหน้าเว็บ" (world: MAIN) — มีไว้ปรับเสียงเท่านั้น
+// สคริปต์ที่รันใน "โลกของหน้าเว็บ" (world: MAIN) — ปรับเสียง + กรอเพลงผ่าน API ของตัวเล่น YouTube
 // เหตุผล: content.js รันในโลกแยก เรียก API ของตัวเล่น YouTube (#movie_player.setVolume ฯลฯ) ไม่ได้
 // และการตั้ง <video>.volume ตรงๆ ไม่ทำให้แถบเสียงของ YouTube ขยับ + ตัวเล่นมักตั้งค่ากลับเอง (ปรับเสียงจากโปรแกรมแล้วไม่ติด)
 // ทำงานคู่กับ content.js ผ่าน window.postMessage (ไม่มีข้อมูลส่วนตัวผ่านช่องนี้ มีแค่ค่าเสียง 0-1 กับสถานะปิดเสียง)
@@ -35,6 +35,18 @@
     if (el) el.muted = !!on;
   }
 
+  // กรอผ่าน seekTo ของตัวเล่น (ตั้ง <video>.currentTime ตรงๆ บน YouTube บางครั้งไม่ติด/ตัวเล่นดึงกลับ)
+  // ไม่ให้เลยท้ายเพลง: กรอเลยความยาว = วิดีโอจบแล้ว YouTube เล่นเพลงถัดไปเอง
+  function seek(t) {
+    const p = player();
+    const el = video();
+    const dur = p && typeof p.getDuration === "function" ? p.getDuration() : (el ? el.duration : NaN);
+    let to = Math.max(0, t);
+    if (isFinite(dur) && dur > 1) to = Math.min(to, dur - 1);
+    if (p && typeof p.seekTo === "function") { p.seekTo(to, true); return; }
+    if (el) el.currentTime = to;
+  }
+
   function post() {
     let volume, muted;
     const p = player();
@@ -55,6 +67,7 @@
     try {
       if (m.type === "volume" && typeof m.value === "number" && isFinite(m.value)) setVolume(m.value);
       else if (m.type === "mute") setMuted(!!m.value);
+      else if (m.type === "seek" && typeof m.value === "number" && isFinite(m.value)) { seek(m.value); return; }
       else if (m.type === "get_volume") { /* ตอบด้านล่าง */ }
       post();
     } catch (err) { /* ห้ามพังหน้าเว็บ */ }
